@@ -1,0 +1,161 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Provider {
+  OPENAI
+  ANTHROPIC
+  GOOGLE
+  XAI
+}
+
+enum ModelRunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  TIMEOUT
+}
+
+enum TemplateType {
+  VERIFY
+  DEBATE
+  INTEGRATE
+}
+
+model Room {
+  id           String         @id @default(cuid())
+  userId       String
+  title        String
+  isArchived   Boolean        @default(false)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  userMessages UserMessage[]
+  handoffs     Handoff[]
+}
+
+model UserMessage {
+  id              String      @id @default(cuid())
+  roomId          String
+  content         String
+  targetModels    String[]
+  mode            String?
+  orderIndex      Int
+  createdAt       DateTime    @default(now())
+  room            Room        @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  modelRuns       ModelRun[]
+  integrateResults IntegrateResult[]
+}
+
+model ModelRun {
+  id               String         @id @default(cuid())
+  userMessageId    String
+  provider         Provider
+  model            String
+  status           ModelRunStatus @default(PENDING)
+  inputTokens      Int?
+  outputTokens     Int?
+  estimatedCostUsd Decimal?       @db.Decimal(10, 8)
+  latencyMs        Int?
+  piiMasked        Boolean        @default(false)
+  settings         Json?
+  createdAt        DateTime       @default(now())
+  userMessage      UserMessage    @relation(fields: [userMessageId], references: [id], onDelete: Cascade)
+  assistantMessage AssistantMessage?
+  sourceHandoffs   Handoff[]      @relation("SourceHandoffs")
+  targetHandoffs   Handoff[]      @relation("TargetHandoffs")
+  usageLogs        UsageLog[]
+}
+
+model AssistantMessage {
+  id          String   @id @default(cuid())
+  modelRunId  String   @unique
+  content     String
+  createdAt   DateTime @default(now())
+  modelRun    ModelRun @relation(fields: [modelRunId], references: [id], onDelete: Cascade)
+}
+
+model Handoff {
+  id               String          @id @default(cuid())
+  roomId           String
+  sourceModelRunId String
+  targetModelRunId String?
+  templateId       String
+  templateType     TemplateType
+  composedPrompt   String
+  userOverride     String?
+  createdAt        DateTime        @default(now())
+  room             Room            @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  sourceModelRun   ModelRun        @relation("SourceHandoffs", fields: [sourceModelRunId], references: [id])
+  targetModelRun   ModelRun?       @relation("TargetHandoffs", fields: [targetModelRunId], references: [id])
+  integrateResult  IntegrateResult?
+}
+
+model IntegrateResult {
+  id                  String      @id @default(cuid())
+  handoffId           String?     @unique
+  userMessageId       String
+  step1Extractions    Json
+  step15TrustStructure Json
+  step15Conflicts     Json
+  step2Prompt         String
+  step2Output         String
+  fallbackUsed        Boolean     @default(false)
+  createdAt           DateTime    @default(now())
+  handoff             Handoff?    @relation(fields: [handoffId], references: [id])
+  userMessage         UserMessage @relation(fields: [userMessageId], references: [id])
+}
+
+model UserApiKey {
+  id           String   @id @default(cuid())
+  userId       String
+  provider     Provider
+  encryptedKey String
+  keyHint      String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([userId, provider])
+}
+
+model UsageLog {
+  id               String   @id @default(cuid())
+  userId           String
+  modelRunId       String
+  provider         Provider
+  model            String
+  inputTokens      Int
+  outputTokens     Int
+  estimatedCostUsd Decimal  @db.Decimal(10, 8)
+  createdAt        DateTime @default(now())
+  modelRun         ModelRun @relation(fields: [modelRunId], references: [id])
+}
+
+model EventLog {
+  id        String   @id @default(cuid())
+  userId    String
+  sessionId String
+  eventType String
+  payload   Json
+  createdAt DateTime @default(now())
+
+  @@index([userId, eventType])
+  @@index([sessionId])
+}
+
+model HandoffTemplate {
+  id          String       @id @default(cuid())
+  type        TemplateType
+  name        String
+  description String
+  promptTpl   String
+  isDefault   Boolean      @default(false)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
