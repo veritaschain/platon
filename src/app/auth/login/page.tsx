@@ -30,7 +30,7 @@ export default function LoginPage() {
           <div className="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-primary/10 mb-2">
             <BrainCircuit className="w-6 h-6 text-primary" />
           </div>
-          <h1 className="text-2xl font-bold">Multi-AI Orchestrator</h1>
+          <h1 className="text-2xl font-bold">Platon AI</h1>
           <p className="text-sm text-muted-foreground">複数AIの思考を統合するエンジン</p>
         </div>
         <form onSubmit={handleLogin} className="space-y-4">

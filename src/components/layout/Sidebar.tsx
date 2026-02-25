@@ -40,7 +40,7 @@ export function Sidebar() {
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-3 border-b border-border min-h-[56px]">
         {!collapsed && (
-          <span className="font-semibold text-sm truncate">Multi-AI</span>
+          <span className="font-semibold text-sm truncate">Platon AI</span>
         )}
         <button
           onClick={() => setCollapsed(!collapsed)}

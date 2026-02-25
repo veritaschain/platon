@@ -34,7 +34,7 @@ export default function LoginPage() {
       <div className="bg-white rounded-2xl shadow-sm border border-gray-200 p-8 w-full max-w-sm">
         <div className="text-center mb-6">
           <div className="text-3xl mb-2">🧠</div>
-          <h1 className="font-bold text-xl text-gray-900">Multi-AI Orchestrator</h1>
+          <h1 className="font-bold text-xl text-gray-900">Platon AI</h1>
           <p className="text-sm text-gray-500 mt-1">複数AIの思考を統合するエンジン</p>
         </div>
 

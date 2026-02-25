@@ -13,7 +13,7 @@ export function EmptyState({ onNewChat }: EmptyStateProps) {
         <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto">
           <BrainCircuit className="w-8 h-8 text-primary" />
         </div>
-        <h2 className="text-2xl font-bold text-foreground">Multi-AI Orchestrator</h2>
+        <h2 className="text-2xl font-bold text-foreground">Platon AI</h2>
         <p className="text-muted-foreground">複数AIの思考を統合するエンジン</p>
       </div>
 

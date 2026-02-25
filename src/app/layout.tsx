@@ -6,7 +6,7 @@ import { Providers } from '@/components/common/Providers'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Multi-AI Orchestrator',
+  title: 'Platon AI',
   description: '複数AIの思考を統合するエンジン',
 }
 
