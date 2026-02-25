@@ -37,8 +37,17 @@ export class XAIConnector implements BaseConnector {
   async validateApiKey(key: string): Promise<boolean> {
     try {
       const client = new OpenAI({ apiKey: key, baseURL: 'https://api.x.ai/v1' })
-      await client.models.list()
+      await client.chat.completions.create({
+        model: 'grok-3',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1,
+      })
       return true
-    } catch { return false }
+    } catch (e: any) {
+      if (e?.status === 401 || e?.status === 403) return false
+      if (e?.error?.code === 'invalid_api_key') return false
+      // 401/403 以外のエラー（レートリミット等）はキー自体は有効
+      return true
+    }
   }
 }
