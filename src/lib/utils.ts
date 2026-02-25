@@ -39,6 +39,7 @@ export function getModelLabel(model: string): string {
   const labels: Record<string, string> = {
     'gpt-4o': 'GPT-4o',
     'gpt-4o-mini': 'GPT-4o mini',
+    'gpt-4.1-mini': 'GPT-4.1 mini',
     'claude-sonnet-4-20250514': 'Claude Sonnet 4',
     'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
     'gemini-2.5-flash': 'Gemini 2.5 Flash',
