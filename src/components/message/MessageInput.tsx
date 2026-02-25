@@ -1,5 +1,5 @@
 'use client'
-import { useState, useRef, KeyboardEvent } from 'react'
+import { useState, useRef, KeyboardEvent, useCallback } from 'react'
 import { Send, Zap, LayoutGrid, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/common/Button'
@@ -20,6 +20,7 @@ export function MessageInput({ roomId }: MessageInputProps) {
   const { isSending, sendMessage } = useMessageStore()
   const { selectedModels, toggleModel, advancedMode, apiKeys } = useConnectorStore()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const isComposingRef = useRef(false)
 
   const handleSend = async () => {
     if (!content.trim() || isSending) return
@@ -29,11 +30,14 @@ export function MessageInput({ roomId }: MessageInputProps) {
   }
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !isComposingRef.current) {
       e.preventDefault()
       handleSend()
     }
   }
+
+  const handleCompositionStart = useCallback(() => { isComposingRef.current = true }, [])
+  const handleCompositionEnd = useCallback(() => { isComposingRef.current = false }, [])
 
   const hasApiKey = apiKeys.length > 0
 
@@ -108,6 +112,8 @@ export function MessageInput({ roomId }: MessageInputProps) {
           value={content}
           onChange={(e) => setContent(e.target.value)}
           onKeyDown={handleKeyDown}
+          onCompositionStart={handleCompositionStart}
+          onCompositionEnd={handleCompositionEnd}
           placeholder={mode === 'verify' ? '質問を入力（主AIが回答→別AIが検証）' : mode === 'multi' ? '質問を入力（複数AIで議論→統合）' : 'メッセージを入力... (Shift+Enterで改行)'}
           className="flex-1 resize-none border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-gray-300 min-h-[44px] max-h-[200px]"
           rows={1}

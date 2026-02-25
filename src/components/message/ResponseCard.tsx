@@ -82,7 +82,7 @@ export function ResponseCard({ run, showHandoffButtons, onVerify, onDebate }: Re
       </div>
 
       {/* Content */}
-      <div className="prose prose-sm max-w-none text-gray-800">
+      <div className="prose prose-sm max-w-none text-gray-800 overflow-x-auto break-words">
         <ReactMarkdown remarkPlugins={[remarkGfm]}>
           {run.assistantMessage?.content ?? ''}
         </ReactMarkdown>
