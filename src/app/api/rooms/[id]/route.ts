@@ -16,6 +16,10 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
           modelRuns: {
             include: { assistantMessage: true },
           },
+          integrateResults: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          },
         },
       },
       handoffs: {

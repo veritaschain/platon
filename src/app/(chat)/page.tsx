@@ -39,18 +39,29 @@ export default function ChatPage() {
             }
           }
 
-          const msgs = room.userMessages.map((m: any) => ({
-            id: m.id,
-            roomId: m.roomId,
-            content: m.content,
-            mode: m.mode,
-            orderIndex: m.orderIndex,
-            modelRuns: (m.modelRuns ?? []).map((r: any) => ({
-              ...r,
-              estimatedCostUsd: r.estimatedCostUsd ? Number(r.estimatedCostUsd) : undefined,
-              handoffInfo: handoffMap.get(r.id) ?? undefined,
-            })),
-          }))
+          const msgs = room.userMessages.map((m: any) => {
+            const ir = m.integrateResults?.[0] ?? null
+            return {
+              id: m.id,
+              roomId: m.roomId,
+              content: m.content,
+              mode: m.mode,
+              orderIndex: m.orderIndex,
+              modelRuns: (m.modelRuns ?? []).map((r: any) => ({
+                ...r,
+                estimatedCostUsd: r.estimatedCostUsd ? Number(r.estimatedCostUsd) : undefined,
+                handoffInfo: handoffMap.get(r.id) ?? undefined,
+              })),
+              integrateResult: ir ? {
+                id: ir.id,
+                step1Extractions: ir.step1Extractions,
+                step15TrustStructure: ir.step15TrustStructure,
+                step15Conflicts: ir.step15Conflicts,
+                step2Output: ir.step2Output,
+                fallbackUsed: ir.fallbackUsed,
+              } : null,
+            }
+          })
           setMessages(msgs)
         }
       })
