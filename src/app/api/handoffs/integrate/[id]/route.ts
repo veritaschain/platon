@@ -11,7 +11,7 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
     where: { id: params.id },
     include: {
       userMessage: {
-        select: { id: true, content: true, roomId: true, room: { select: { user.id: true } } },
+        select: { id: true, content: true, roomId: true, room: { select: { userId: true } } },
       },
     },
   })
