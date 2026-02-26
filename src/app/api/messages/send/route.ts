@@ -172,7 +172,7 @@ export async function POST(req: Request) {
 
       await prisma.usageLog.create({
         data: {
-          user.id,
+          userId: user.id,
           modelRunId: modelRun.id,
           provider,
           model: actualModel,

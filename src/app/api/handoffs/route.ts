@@ -117,7 +117,7 @@ export async function POST(req: Request) {
 
     await prisma.usageLog.create({
       data: {
-        user.id,
+        userId: user.id,
         modelRunId: targetRun.id,
         provider: targetModelInfo.provider,
         model: actualModel,
