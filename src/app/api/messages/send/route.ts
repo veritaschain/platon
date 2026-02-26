@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
 import { prisma } from '@/lib/db/client'
+import { getUserId } from '@/lib/auth'
 import { getConnector } from '@/lib/connectors/registry'
 import { decrypt } from '@/lib/crypto/encryption'
 import { maskPII } from '@/lib/governance/pii-masker'
@@ -27,9 +27,7 @@ const MODE_DEFAULTS = {
 }
 
 export async function POST(req: Request) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = await getUserId()
 
   const body = await req.json()
   const { roomId, content, mode, targetModels, settings } = body
@@ -37,7 +35,7 @@ export async function POST(req: Request) {
   // プロバイダーポリシーチェック
   const policyCheck = checkProviderPolicy(content)
   if (policyCheck.blocked) {
-    await logEvent(user.id, roomId, 'provider_block', { reason: policyCheck.reason })
+    await logEvent(userId, roomId, 'provider_block', { reason: policyCheck.reason })
     return NextResponse.json({ error: policyCheck.reason }, { status: 400 })
   }
 
@@ -45,14 +43,14 @@ export async function POST(req: Request) {
   const maskResult = maskPII(content)
   const maskedContent = maskResult.masked
   if (maskResult.maskCount > 0) {
-    await logEvent(user.id, roomId, 'pii_mask', {
+    await logEvent(userId, roomId, 'pii_mask', {
       maskCount: maskResult.maskCount,
       patterns: maskResult.patterns,
     })
   }
 
   // ルーム存在確認
-  const room = await prisma.room.findFirst({ where: { id: roomId, userId: user.id } })
+  const room = await prisma.room.findFirst({ where: { id: roomId, userId } })
   if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 })
 
   // メッセージ数取得（orderIndex用）
@@ -76,7 +74,7 @@ export async function POST(req: Request) {
     },
   })
 
-  await logEvent(user.id, roomId, 'user_message', {
+  await logEvent(userId, roomId, 'user_message', {
     userMessageId: userMessage.id,
     mode,
     targetModels: modelsToUse,
@@ -84,7 +82,7 @@ export async function POST(req: Request) {
 
   // APIキー取得
   const apiKeys = await prisma.userApiKey.findMany({
-    where: { userId: user.id, isActive: true },
+    where: { userId, isActive: true },
   })
   const keyMap: Record<string, string> = {}
   for (const k of apiKeys) {
@@ -128,7 +126,7 @@ export async function POST(req: Request) {
   const runPromises = models.map(async ({ provider, model }) => {
     if (!keyMap[provider]) return null
 
-    const { model: actualModel, degraded } = await checkAndDegrade(user.id, model, provider)
+    const { model: actualModel, degraded } = await checkAndDegrade(userId, model, provider)
 
     const modelRun = await prisma.modelRun.create({
       data: {
@@ -172,7 +170,7 @@ export async function POST(req: Request) {
 
       await prisma.usageLog.create({
         data: {
-          userId: user.id,
+          userId,
           modelRunId: modelRun.id,
           provider,
           model: actualModel,
@@ -182,7 +180,7 @@ export async function POST(req: Request) {
         },
       })
 
-      await logEvent(user.id, roomId, 'model_run', {
+      await logEvent(userId, roomId, 'model_run', {
         modelRunId: modelRun.id,
         model: actualModel,
         status: 'COMPLETED',
@@ -191,7 +189,7 @@ export async function POST(req: Request) {
       }, maskedContent)
 
       if (cost > 0) {
-        await logEvent(user.id, roomId, 'cost', {
+        await logEvent(userId, roomId, 'cost', {
           modelRunId: modelRun.id,
           model: actualModel,
           cost,
@@ -228,7 +226,7 @@ export async function POST(req: Request) {
       const verifier = MODE_DEFAULTS.verify.verifierModel
       if (keyMap[verifier.provider]) {
         try {
-          const { model: verifyModel, degraded: verifyDegraded } = await checkAndDegrade(user.id, verifier.model, verifier.provider)
+          const { model: verifyModel, degraded: verifyDegraded } = await checkAndDegrade(userId, verifier.model, verifier.provider)
           const template = HANDOFF_TEMPLATES.VERIFY
           const verifyPrompt = template.buildPrompt(primaryRun.model, primaryRun.assistantMessage.content)
           const { masked: maskedVerifyPrompt } = maskPII(verifyPrompt)
@@ -256,14 +254,14 @@ export async function POST(req: Request) {
           })
           await prisma.assistantMessage.create({ data: { modelRunId: verifyModelRun.id, content: verifyResult.content } })
           await prisma.usageLog.create({
-            data: { userId: user.id, modelRunId: verifyModelRun.id, provider: verifier.provider, model: verifyModel, inputTokens: verifyResult.inputTokens, outputTokens: verifyResult.outputTokens, estimatedCostUsd: verifyCost },
+            data: { userId, modelRunId: verifyModelRun.id, provider: verifier.provider, model: verifyModel, inputTokens: verifyResult.inputTokens, outputTokens: verifyResult.outputTokens, estimatedCostUsd: verifyCost },
           })
 
           await prisma.handoff.create({
             data: { roomId, sourceModelRunId: primaryRunId, targetModelRunId: verifyModelRun.id, templateId: 'verify', templateType: 'VERIFY', composedPrompt: maskedVerifyPrompt },
           })
 
-          await logEvent(user.id, roomId, 'handoff', { type: 'AUTO_VERIFY', primaryRunId, verifyRunId: verifyModelRun.id, verifyDegraded })
+          await logEvent(userId, roomId, 'handoff', { type: 'AUTO_VERIFY', primaryRunId, verifyRunId: verifyModelRun.id, verifyDegraded })
 
           verifyRunId = verifyModelRun.id
         } catch (err) {

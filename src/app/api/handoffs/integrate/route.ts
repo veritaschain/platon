@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
 import { prisma } from '@/lib/db/client'
 import { decrypt } from '@/lib/crypto/encryption'
 import { logEvent } from '@/lib/governance/event-logger'
@@ -7,11 +6,10 @@ import { maskPII } from '@/lib/governance/pii-masker'
 import { checkAndDegrade } from '@/lib/governance/cost-controller'
 import { detectLoop } from '@/lib/governance/loop-detector'
 import { executeIntegrate } from '@/lib/integrate'
+import { getUserId } from '@/lib/auth'
 
 export async function POST(req: Request) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = await getUserId()
 
   const { userMessageId, roomId } = await req.json()
 
@@ -43,7 +41,7 @@ export async function POST(req: Request) {
 
   // APIキー取得
   const apiKeys = await prisma.userApiKey.findMany({
-    where: { userId: user.id, isActive: true },
+    where: { userId, isActive: true },
   })
   const keyMap: Record<string, string> = {}
   for (const k of apiKeys) keyMap[k.provider] = decrypt(k.encryptedKey)
@@ -64,7 +62,7 @@ export async function POST(req: Request) {
       },
     })
 
-    await logEvent(user.id, roomId, 'integrate', {
+    await logEvent(userId, roomId, 'integrate', {
       integrateResultId: integrateResult.id,
       fallbackUsed: output.fallbackUsed,
       modelCount: runs.length,
@@ -78,9 +76,7 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = await getUserId()
 
   const url = new URL(req.url)
   const userMessageId = url.searchParams.get('userMessageId')

@@ -1,11 +1,9 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
 import { prisma } from '@/lib/db/client'
+import { getUserId } from '@/lib/auth'
 
 export async function GET(_: Request, { params }: { params: { id: string } }) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = await getUserId()
 
   const result = await prisma.integrateResult.findUnique({
     where: { id: params.id },
@@ -21,7 +19,7 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   }
 
   // RLS: ユーザー所有チェック
-  if (result.userMessage.room.userId !== user.id) {
+  if (result.userMessage.room.userId !== userId) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
 

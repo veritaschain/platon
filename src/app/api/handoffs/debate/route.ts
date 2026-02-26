@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
 import { prisma } from '@/lib/db/client'
+import { getUserId } from '@/lib/auth'
 import { getConnector } from '@/lib/connectors/registry'
 import { decrypt } from '@/lib/crypto/encryption'
 import { maskPII } from '@/lib/governance/pii-masker'
@@ -13,9 +13,7 @@ import { SUPPORTED_MODELS } from '@/lib/connectors/types'
 import type { Provider } from '@/lib/connectors/types'
 
 export async function POST(req: Request) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = await getUserId()
 
   const { sourceModelRunId, opponentModel, roomId } = await req.json()
 
@@ -30,7 +28,7 @@ export async function POST(req: Request) {
   // プロバイダーポリシーチェック
   const policyCheck = checkProviderPolicy(sourceRun.assistantMessage.content)
   if (policyCheck.blocked) {
-    await logEvent(user.id, roomId, 'provider_block', { reason: policyCheck.reason })
+    await logEvent(userId, roomId, 'provider_block', { reason: policyCheck.reason })
     return NextResponse.json({ error: policyCheck.reason }, { status: 400 })
   }
 
@@ -38,13 +36,13 @@ export async function POST(req: Request) {
   if (!opponentInfo) return NextResponse.json({ error: 'Invalid model' }, { status: 400 })
 
   const opponentKeyRecord = await prisma.userApiKey.findFirst({
-    where: { userId: user.id, provider: opponentInfo.provider, isActive: true },
+    where: { userId, provider: opponentInfo.provider, isActive: true },
   })
   if (!opponentKeyRecord) return NextResponse.json({ error: 'No API key for opponent' }, { status: 400 })
   const opponentKey = decrypt(opponentKeyRecord.encryptedKey)
 
   const sourceKeyRecord = await prisma.userApiKey.findFirst({
-    where: { userId: user.id, provider: sourceRun.provider, isActive: true },
+    where: { userId, provider: sourceRun.provider, isActive: true },
   })
   if (!sourceKeyRecord) return NextResponse.json({ error: 'No API key for source' }, { status: 400 })
   const sourceKey = decrypt(sourceKeyRecord.encryptedKey)
@@ -52,8 +50,8 @@ export async function POST(req: Request) {
   const template = HANDOFF_TEMPLATES.DEBATE
 
   // コスト劣化チェック
-  const { model: actualOpponentModel, degraded: opponentDegraded } = await checkAndDegrade(user.id, opponentModel, opponentInfo.provider)
-  const { model: actualSourceModel, degraded: sourceDegraded } = await checkAndDegrade(user.id, sourceRun.model, sourceRun.provider)
+  const { model: actualOpponentModel, degraded: opponentDegraded } = await checkAndDegrade(userId, opponentModel, opponentInfo.provider)
+  const { model: actualSourceModel, degraded: sourceDegraded } = await checkAndDegrade(userId, sourceRun.model, sourceRun.provider)
 
   // Step 1: 反論
   const counterPrompt = template.buildCounterPrompt(sourceRun.model, sourceRun.assistantMessage.content)
@@ -83,12 +81,12 @@ export async function POST(req: Request) {
     })
     await prisma.assistantMessage.create({ data: { modelRunId: counterRun.id, content: counterResult.content } })
     await prisma.usageLog.create({
-      data: { userId: user.id, modelRunId: counterRun.id, provider: opponentInfo.provider, model: actualOpponentModel, inputTokens: counterResult.inputTokens, outputTokens: counterResult.outputTokens, estimatedCostUsd: counterCost },
+      data: { userId, modelRunId: counterRun.id, provider: opponentInfo.provider, model: actualOpponentModel, inputTokens: counterResult.inputTokens, outputTokens: counterResult.outputTokens, estimatedCostUsd: counterCost },
     })
 
     // ループ検出
     if (detectLoop([sourceRun.assistantMessage.content, counterResult.content])) {
-      await logEvent(user.id, roomId, 'provider_block', { reason: 'loop_in_debate' })
+      await logEvent(userId, roomId, 'provider_block', { reason: 'loop_in_debate' })
       return NextResponse.json({ counterRunId: counterRun.id, stopped: true, reason: 'loop_detected' })
     }
 
@@ -134,7 +132,7 @@ export async function POST(req: Request) {
     })
     await prisma.assistantMessage.create({ data: { modelRunId: rebuttalRun.id, content: rebuttalResult.content } })
     await prisma.usageLog.create({
-      data: { userId: user.id, modelRunId: rebuttalRun.id, provider: sourceRun.provider, model: actualSourceModel, inputTokens: rebuttalResult.inputTokens, outputTokens: rebuttalResult.outputTokens, estimatedCostUsd: rebuttalCost },
+      data: { userId, modelRunId: rebuttalRun.id, provider: sourceRun.provider, model: actualSourceModel, inputTokens: rebuttalResult.inputTokens, outputTokens: rebuttalResult.outputTokens, estimatedCostUsd: rebuttalCost },
     })
 
     await prisma.handoff.create({
@@ -148,7 +146,7 @@ export async function POST(req: Request) {
       },
     })
 
-    await logEvent(user.id, roomId, 'handoff', {
+    await logEvent(userId, roomId, 'handoff', {
       type: 'DEBATE',
       counterRunId: counterRun.id,
       rebuttalRunId: rebuttalRun.id,
@@ -156,7 +154,7 @@ export async function POST(req: Request) {
       sourceDegraded,
     })
 
-    await logEvent(user.id, roomId, 'cost', {
+    await logEvent(userId, roomId, 'cost', {
       counterCost,
       rebuttalCost,
       totalCost: counterCost + rebuttalCost,

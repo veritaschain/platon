@@ -1,14 +1,12 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
 import { prisma } from '@/lib/db/client'
+import { getUserId } from '@/lib/auth'
 
 export async function GET(_: Request, { params }: { params: { id: string } }) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = await getUserId()
 
   const room = await prisma.room.findFirst({
-    where: { id: params.id, userId: user.id },
+    where: { id: params.id, userId },
     include: {
       userMessages: {
         orderBy: { orderIndex: 'asc' },
@@ -38,25 +36,21 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
 }
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = await getUserId()
 
   const body = await req.json()
   const room = await prisma.room.updateMany({
-    where: { id: params.id, userId: user.id },
+    where: { id: params.id, userId },
     data: { title: body.title, isArchived: body.isArchived },
   })
   return NextResponse.json(room)
 }
 
 export async function DELETE(_: Request, { params }: { params: { id: string } }) {
-  const supabase = createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = await getUserId()
 
   await prisma.room.updateMany({
-    where: { id: params.id, userId: user.id },
+    where: { id: params.id, userId },
     data: { isArchived: true },
   })
   return NextResponse.json({ success: true })
