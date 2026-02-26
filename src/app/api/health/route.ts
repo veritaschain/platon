@@ -8,7 +8,7 @@ export async function GET() {
 
   // 環境変数チェック
   checks.envVars = {
-    DATABASE_URL: process.env.DATABASE_URL ? 'set' : 'MISSING',
+    DATABASE_URL: process.env.DATABASE_URL ? process.env.DATABASE_URL.replace(/\/\/.*@/, '//***@') : 'MISSING',
     NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL ? 'set' : 'MISSING',
     NEXT_PUBLIC_SUPABASE_ANON_KEY: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ? 'set' : 'MISSING',
     ENCRYPTION_KEY: process.env.ENCRYPTION_KEY ? 'set' : 'MISSING',
