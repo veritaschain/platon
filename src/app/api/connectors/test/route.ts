@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/client'
 import { getConnector } from '@/lib/connectors/registry'
 import { decrypt } from '@/lib/crypto/encryption'
-import { getUserId } from '@/lib/auth'
+import { createClient } from '@/lib/supabase/server'
 import type { Provider } from '@/lib/connectors/types'
 
 export async function POST(req: Request) {
@@ -10,10 +10,12 @@ export async function POST(req: Request) {
 
   // 保存済みキーのテスト
   if (testSaved) {
-    const userId = await getUserId()
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const keyRecord = await prisma.userApiKey.findFirst({
-      where: { userId, provider: provider as Provider, isActive: true },
+      where: { userId: user.id, provider: provider as Provider, isActive: true },
     })
     if (!keyRecord) {
       return NextResponse.json({ valid: false, message: 'APIキーが登録されていません' })

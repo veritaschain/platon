@@ -1,15 +1,17 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/client'
 import { encrypt } from '@/lib/crypto/encryption'
-import { getUserId } from '@/lib/auth'
+import { createClient } from '@/lib/supabase/server'
 import type { Provider } from '@/lib/connectors/types'
 
 export async function GET() {
   try {
-    const userId = await getUserId()
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const keys = await prisma.userApiKey.findMany({
-      where: { userId },
+      where: { userId: user.id },
       select: { id: true, provider: true, keyHint: true, isActive: true, createdAt: true },
     })
     return NextResponse.json(keys)
@@ -21,7 +23,9 @@ export async function GET() {
 
 export async function POST(req: Request) {
   try {
-    const userId = await getUserId()
+    const supabase = createClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
     const { provider, apiKey } = await req.json()
     if (!provider || !apiKey) return NextResponse.json({ error: 'Missing fields' }, { status: 400 })
@@ -29,7 +33,7 @@ export async function POST(req: Request) {
     const encryptedKey = encrypt(apiKey)
     const keyHint = '...' + apiKey.slice(-4)
 
-    const existing = await prisma.userApiKey.findFirst({ where: { userId, provider } })
+    const existing = await prisma.userApiKey.findFirst({ where: { userId: user.id, provider } })
     if (existing) {
       await prisma.userApiKey.update({
         where: { id: existing.id },
@@ -37,7 +41,7 @@ export async function POST(req: Request) {
       })
     } else {
       await prisma.userApiKey.create({
-        data: { userId, provider: provider as Provider, encryptedKey, keyHint },
+        data: { userId: user.id, provider: provider as Provider, encryptedKey, keyHint },
       })
     }
 

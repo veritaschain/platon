@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/client'
-import { getUserId } from '@/lib/auth'
+import { createClient } from '@/lib/supabase/server'
 
 export async function GET(req: Request) {
-  const userId = await getUserId()
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const url = new URL(req.url)
   const period = url.searchParams.get('period') ?? 'month'
@@ -25,7 +27,7 @@ export async function GET(req: Request) {
   }
 
   const logs = await prisma.usageLog.findMany({
-    where: { userId, createdAt: { gte: startDate } },
+    where: { userId: user.id, createdAt: { gte: startDate } },
     orderBy: { createdAt: 'desc' },
     select: {
       id: true,

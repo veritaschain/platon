@@ -6,10 +6,12 @@ import { maskPII } from '@/lib/governance/pii-masker'
 import { checkAndDegrade } from '@/lib/governance/cost-controller'
 import { detectLoop } from '@/lib/governance/loop-detector'
 import { executeIntegrate } from '@/lib/integrate'
-import { getUserId } from '@/lib/auth'
+import { createClient } from '@/lib/supabase/server'
 
 export async function POST(req: Request) {
-  const userId = await getUserId()
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { userMessageId, roomId } = await req.json()
 
@@ -41,7 +43,7 @@ export async function POST(req: Request) {
 
   // APIキー取得
   const apiKeys = await prisma.userApiKey.findMany({
-    where: { userId, isActive: true },
+    where: { userId: user.id, isActive: true },
   })
   const keyMap: Record<string, string> = {}
   for (const k of apiKeys) keyMap[k.provider] = decrypt(k.encryptedKey)
@@ -62,7 +64,7 @@ export async function POST(req: Request) {
       },
     })
 
-    await logEvent(userId, roomId, 'integrate', {
+    await logEvent(user.id, roomId, 'integrate', {
       integrateResultId: integrateResult.id,
       fallbackUsed: output.fallbackUsed,
       modelCount: runs.length,
@@ -76,7 +78,9 @@ export async function POST(req: Request) {
 }
 
 export async function GET(req: Request) {
-  const userId = await getUserId()
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const url = new URL(req.url)
   const userMessageId = url.searchParams.get('userMessageId')

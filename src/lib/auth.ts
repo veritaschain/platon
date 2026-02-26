@@ -4,35 +4,15 @@
 import { createClient } from '@/lib/supabase/server'
 import { NextRequest, NextResponse } from 'next/server'
 
-const ANONYMOUS_USER_ID = 'anonymous-user'
-
 export async function getAuthenticatedUser(req?: NextRequest) {
-  try {
-    const supabase = createClient()
-    const { data: { user }, error } = await supabase.auth.getUser()
+  const supabase = createClient()
+  const { data: { user }, error } = await supabase.auth.getUser()
 
-    if (error || !user) {
-      // 認証無効化中: 仮ユーザーを返す
-      return { user: { id: ANONYMOUS_USER_ID } as any, error: null }
-    }
-
-    return { user, error: null }
-  } catch {
-    return { user: { id: ANONYMOUS_USER_ID } as any, error: null }
+  if (error || !user) {
+    return { user: null, error: 'Unauthorized' }
   }
-}
 
-/**
- * API ルートで使う: Supabase 認証またはフォールバック
- */
-export async function getUserId(): Promise<string> {
-  try {
-    const supabase = createClient()
-    const { data: { user } } = await supabase.auth.getUser()
-    return user?.id ?? ANONYMOUS_USER_ID
-  } catch {
-    return ANONYMOUS_USER_ID
-  }
+  return { user, error: null }
 }
 
 export function unauthorizedResponse() {

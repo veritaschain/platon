@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db/client'
-import { getUserId } from '@/lib/auth'
+import { createClient } from '@/lib/supabase/server'
 import { getConnector } from '@/lib/connectors/registry'
 import { decrypt } from '@/lib/crypto/encryption'
 import { maskPII } from '@/lib/governance/pii-masker'
@@ -12,7 +12,9 @@ import { HANDOFF_TEMPLATES } from '@/lib/handoff/templates'
 import type { Provider } from '@/lib/connectors/types'
 
 export async function POST(req: Request) {
-  const userId = await getUserId()
+  const supabase = createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const { sourceModelRunId, targetModel, templateId, userOverride, roomId } = await req.json()
 
@@ -44,14 +46,14 @@ export async function POST(req: Request) {
     .filter((c): c is string => !!c)
   chainContents.push(sourceRun.assistantMessage.content)
   if (detectLoop(chainContents)) {
-    await logEvent(userId, roomId, 'provider_block', { reason: 'loop_detected', sourceModelRunId })
+    await logEvent(user.id, roomId, 'provider_block', { reason: 'loop_detected', sourceModelRunId })
     return NextResponse.json({ error: 'Loop detected: similar responses repeating' }, { status: 400 })
   }
 
   // プロバイダーポリシーチェック
   const policyCheck = checkProviderPolicy(sourceRun.assistantMessage.content)
   if (policyCheck.blocked) {
-    await logEvent(userId, roomId, 'provider_block', { reason: policyCheck.reason })
+    await logEvent(user.id, roomId, 'provider_block', { reason: policyCheck.reason })
     return NextResponse.json({ error: policyCheck.reason }, { status: 400 })
   }
 
@@ -69,11 +71,11 @@ export async function POST(req: Request) {
 
   // APIキー取得 & コスト制御
   const targetModelInfo = await getTargetModelInfo(targetModel)
-  const apiKey = await getUserApiKey(userId, targetModelInfo.provider)
+  const apiKey = await getUserApiKey(user.id, targetModelInfo.provider)
   if (!apiKey) return NextResponse.json({ error: 'No API key for target provider' }, { status: 400 })
 
   // コスト上限チェック・劣化
-  const { model: actualModel, degraded } = await checkAndDegrade(userId, targetModel, targetModelInfo.provider)
+  const { model: actualModel, degraded } = await checkAndDegrade(user.id, targetModel, targetModelInfo.provider)
 
   // 新規ModelRun
   const targetRun = await prisma.modelRun.create({
@@ -115,7 +117,7 @@ export async function POST(req: Request) {
 
     await prisma.usageLog.create({
       data: {
-        userId,
+        user.id,
         modelRunId: targetRun.id,
         provider: targetModelInfo.provider,
         model: actualModel,
@@ -137,7 +139,7 @@ export async function POST(req: Request) {
       },
     })
 
-    await logEvent(userId, roomId, 'handoff', {
+    await logEvent(user.id, roomId, 'handoff', {
       handoffId: handoff.id,
       templateType: 'VERIFY',
       targetModel: actualModel,
@@ -146,7 +148,7 @@ export async function POST(req: Request) {
     })
 
     if (cost > 0) {
-      await logEvent(userId, roomId, 'cost', {
+      await logEvent(user.id, roomId, 'cost', {
         modelRunId: targetRun.id,
         model: actualModel,
         cost,
