@@ -77,46 +77,143 @@ export const useMessageStore = create<MessageStore>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ roomId, content, mode, targetModels }),
       })
-      const data = await res.json()
 
-      if (!res.ok || !data.userMessageId) {
-        console.error('[sendMessage] API error:', data.error ?? data)
+      // Fallback: non-SSE response (error or legacy format)
+      const contentType = res.headers.get('content-type') ?? ''
+      if (!contentType.includes('text/event-stream')) {
+        const data = await res.json()
+        if (!res.ok || !data.userMessageId) {
+          console.error('[sendMessage] API error:', data.error ?? data)
+          set(s => ({
+            messages: s.messages.map(m =>
+              m.id === tempId ? {
+                ...m,
+                modelRuns: [{
+                  id: 'error',
+                  model: '',
+                  provider: '',
+                  status: 'FAILED' as const,
+                  piiMasked: false,
+                  assistantMessage: { id: 'error', content: data.error ?? 'メッセージの送信に失敗しました' },
+                }],
+              } : m
+            ),
+            isSending: false,
+          }))
+          return
+        }
+
+        // Legacy JSON fallback
+        const { userMessageId } = data
+        const runsRes = await fetch(`/api/messages/${userMessageId}/runs`)
+        const runs = await runsRes.json()
         set(s => ({
           messages: s.messages.map(m =>
-            m.id === tempId ? {
-              ...m,
-              modelRuns: [{
-                id: 'error',
-                model: '',
-                provider: '',
-                status: 'FAILED' as const,
-                piiMasked: false,
-                assistantMessage: { id: 'error', content: data.error ?? 'メッセージの送信に失敗しました' },
-              }],
-            } : m
+            m.id === tempId ? { ...m, id: userMessageId, modelRuns: Array.isArray(runs) ? runs : [] } : m
           ),
           isSending: false,
         }))
+
+        const completedRuns = Array.isArray(runs) ? runs.filter((r: ModelRun) => r.status === 'COMPLETED') : []
+        if (mode === 'multi' && completedRuns.length >= 2) {
+          await get().executeIntegrate(userMessageId, roomId)
+        }
         return
       }
 
-      const { userMessageId } = data
+      // --- SSE streaming ---
+      const reader = res.body!.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let realUserMessageId: string | null = null
 
-      // Fetch actual runs
-      const runsRes = await fetch(`/api/messages/${userMessageId}/runs`)
-      const runs = await runsRes.json()
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
 
-      set(s => ({
-        messages: s.messages.map(m =>
-          m.id === tempId ? { ...m, id: userMessageId, modelRuns: Array.isArray(runs) ? runs : [] } : m
-        ),
-        isSending: false,
-      }))
+        buffer += decoder.decode(value, { stream: true })
 
-      // Auto-integrate for multi mode
-      const completedRuns = Array.isArray(runs) ? runs.filter((r: ModelRun) => r.status === 'COMPLETED') : []
-      if (mode === 'multi' && completedRuns.length >= 2) {
-        await get().executeIntegrate(userMessageId, roomId)
+        // Parse SSE events from buffer
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? '' // keep incomplete line in buffer
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const jsonStr = line.slice(6)
+          if (!jsonStr) continue
+
+          let event: Record<string, unknown>
+          try {
+            event = JSON.parse(jsonStr)
+          } catch {
+            continue
+          }
+
+          if (event.type === 'init') {
+            realUserMessageId = event.userMessageId as string
+            const modelsList = event.models as { provider: string; model: string }[]
+
+            // Replace temp ID with real ID, show all models as RUNNING
+            set(s => ({
+              messages: s.messages.map(m =>
+                m.id === tempId ? {
+                  ...m,
+                  id: realUserMessageId!,
+                  modelRuns: modelsList.map(mdl => ({
+                    id: `pending-${mdl.provider}-${mdl.model}`,
+                    model: mdl.model,
+                    provider: mdl.provider,
+                    status: 'RUNNING' as const,
+                    piiMasked: false,
+                  })),
+                } : m
+              ),
+            }))
+          } else if (event.type === 'run') {
+            const run = event.run as ModelRun
+            const msgId = realUserMessageId ?? tempId
+
+            set(s => ({
+              messages: s.messages.map(m => {
+                if (m.id !== msgId) return m
+
+                // Find existing placeholder run for this provider+model, or append
+                const existingIdx = m.modelRuns.findIndex(
+                  r => r.id.startsWith('pending-') && r.provider === run.provider && r.model === run.model
+                )
+
+                let newRuns: ModelRun[]
+                if (existingIdx >= 0) {
+                  newRuns = [...m.modelRuns]
+                  newRuns[existingIdx] = run
+                } else {
+                  newRuns = [...m.modelRuns, run]
+                }
+
+                return { ...m, modelRuns: newRuns }
+              }),
+            }))
+          } else if (event.type === 'done') {
+            set({ isSending: false })
+
+            // Fire-and-forget: auto-integrate for multi mode
+            if (mode === 'multi' && realUserMessageId) {
+              const currentMsg = get().messages.find(m => m.id === realUserMessageId)
+              const completedCount = currentMsg?.modelRuns.filter(r => r.status === 'COMPLETED').length ?? 0
+              if (completedCount >= 2) {
+                get().executeIntegrate(realUserMessageId, roomId)
+              }
+            }
+          } else if (event.type === 'error') {
+            console.error('[SSE error event]', event.error)
+            set({ isSending: false })
+          }
+        }
+      }
+
+      // Safety: ensure isSending is cleared even if done event was missed
+      if (get().isSending) {
+        set({ isSending: false })
       }
     } catch (err) {
       console.error('[sendMessage] unexpected error:', err)
