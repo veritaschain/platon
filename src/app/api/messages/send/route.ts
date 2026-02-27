@@ -34,14 +34,14 @@ export async function POST(req: Request) {
   const body = await req.json()
   const { roomId, content, mode, targetModels, settings } = body
 
-  // Provider policy check
+  // プロバイダーポリシーチェック
   const policyCheck = checkProviderPolicy(content)
   if (policyCheck.blocked) {
     await logEvent(user.id, roomId, 'provider_block', { reason: policyCheck.reason })
     return NextResponse.json({ error: policyCheck.reason }, { status: 400 })
   }
 
-  // PII masking
+  // PIIマスキング
   const maskResult = maskPII(content)
   const maskedContent = maskResult.masked
   if (maskResult.maskCount > 0) {
@@ -51,20 +51,20 @@ export async function POST(req: Request) {
     })
   }
 
-  // Room check
+  // ルーム存在確認
   const room = await prisma.room.findFirst({ where: { id: roomId, userId: user.id } })
   if (!room) return NextResponse.json({ error: 'Room not found' }, { status: 404 })
 
-  // Message count for orderIndex
+  // メッセージ数取得（orderIndex用）
   const msgCount = await prisma.userMessage.count({ where: { roomId } })
 
-  // Auto-generate room title on first message
+  // ルーム名自動生成（初回）
   if (msgCount === 0 && room.title === '新しい会話') {
     const autoTitle = content.slice(0, 40) + (content.length > 40 ? '...' : '')
     await prisma.room.update({ where: { id: roomId }, data: { title: autoTitle } })
   }
 
-  // Create UserMessage
+  // UserMessage作成
   const modelsToUse = targetModels ?? []
   const userMessage = await prisma.userMessage.create({
     data: {
@@ -82,7 +82,7 @@ export async function POST(req: Request) {
     targetModels: modelsToUse,
   }, maskedContent)
 
-  // Fetch API keys
+  // APIキー取得
   const apiKeys = await prisma.userApiKey.findMany({
     where: { userId: user.id, isActive: true },
   })
@@ -91,21 +91,25 @@ export async function POST(req: Request) {
     keyMap[k.provider] = decrypt(k.encryptedKey)
   }
 
-  // Determine models
+  // モデル決定
   let models: { provider: Provider; model: string }[] = []
   if (modelsToUse.length > 0) {
+    // 明示的にモデル指定がある場合
     for (const modelId of modelsToUse.slice(0, 3)) {
       const found = SUPPORTED_MODELS.find(m => m.model === modelId)
       if (found && keyMap[found.provider]) models.push({ provider: found.provider, model: found.model })
     }
   } else if (mode === 'multi') {
+    // 多角的レビュー: デフォルト3モデル（APIキーがあるもの）
     for (const m of MODE_DEFAULTS.multi.models) {
       if (keyMap[m.provider]) models.push(m)
     }
   } else if (mode === 'verify') {
+    // 厳密検証: 主AIモデル（検証は後でハンドオフ実行）
     const primary = MODE_DEFAULTS.verify.primaryModel
     if (keyMap[primary.provider]) models.push(primary)
   } else {
+    // 通常: 利用可能なプロバイダーから1モデル
     for (const sm of SUPPORTED_MODELS) {
       if (keyMap[sm.provider] && models.length === 0) {
         models.push({ provider: sm.provider, model: sm.model })
@@ -120,236 +124,195 @@ export async function POST(req: Request) {
     )
   }
 
-  // --- SSE Streaming Response ---
-  const encoder = new TextEncoder()
+  // 並列実行
+  interface RunResult {
+    id: string
+    model: string
+    provider: string
+    status: 'COMPLETED' | 'FAILED' | 'TIMEOUT'
+    inputTokens?: number
+    outputTokens?: number
+    estimatedCostUsd?: number
+    latencyMs?: number
+    piiMasked: boolean
+    assistantMessage?: { id: string; content: string }
+    handoffInfo?: { sourceModelRunId: string; templateType: string }
+  }
 
-  const stream = new ReadableStream({
-    async start(controller) {
-      const send = (data: Record<string, unknown>) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
+  const runs: RunResult[] = []
+
+  const runPromises = models.map(async ({ provider, model }) => {
+    if (!keyMap[provider]) return
+
+    const { model: actualModel, degraded } = await checkAndDegrade(user.id, model, provider)
+
+    const modelRun = await prisma.modelRun.create({
+      data: {
+        userMessageId: userMessage.id,
+        provider,
+        model: actualModel,
+        status: 'RUNNING',
+        piiMasked: maskResult.maskCount > 0,
+      },
+    })
+
+    try {
+      const connector = getConnector(provider)
+      const messages = [{ role: 'user' as const, content: maskedContent }]
+      const cfg = {
+        provider,
+        model: actualModel,
+        apiKey: keyMap[provider],
+        maxTokens: settings?.maxTokens ?? 4096,
+        temperature: settings?.temperature ?? 0.7,
+        timeoutMs: 30000,
       }
 
-      try {
-        // init event: notify client of models to expect
-        send({
-          type: 'init',
-          userMessageId: userMessage.id,
-          models: models.map(m => ({ provider: m.provider, model: m.model })),
-        })
+      const result = await connector.send(messages, cfg)
+      const cost = connector.estimateCost(result.inputTokens, result.outputTokens, actualModel)
 
-        // Execute all models in parallel, emit run event as each completes
-        const completedRunIds: string[] = []
+      // DB書き込みを並列化
+      const [, assistantMsg] = await Promise.all([
+        prisma.modelRun.update({
+          where: { id: modelRun.id },
+          data: {
+            status: 'COMPLETED',
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+            estimatedCostUsd: cost,
+            latencyMs: result.latencyMs,
+          },
+        }),
+        prisma.assistantMessage.create({
+          data: { modelRunId: modelRun.id, content: result.content },
+        }),
+        prisma.usageLog.create({
+          data: {
+            userId: user.id,
+            modelRunId: modelRun.id,
+            provider,
+            model: actualModel,
+            inputTokens: result.inputTokens,
+            outputTokens: result.outputTokens,
+            estimatedCostUsd: cost,
+          },
+        }),
+        logEvent(user.id, roomId, 'model_run', {
+          modelRunId: modelRun.id,
+          model: actualModel,
+          status: 'COMPLETED',
+          cost,
+          degraded,
+        }, maskedContent),
+        cost > 0
+          ? logEvent(user.id, roomId, 'cost', {
+              modelRunId: modelRun.id,
+              model: actualModel,
+              cost,
+            })
+          : Promise.resolve(),
+      ])
 
-        const runPromises = models.map(async ({ provider, model }) => {
-          if (!keyMap[provider]) return null
+      runs.push({
+        id: modelRun.id,
+        model: actualModel,
+        provider,
+        status: 'COMPLETED',
+        inputTokens: result.inputTokens,
+        outputTokens: result.outputTokens,
+        estimatedCostUsd: cost,
+        latencyMs: result.latencyMs,
+        piiMasked: maskResult.maskCount > 0,
+        assistantMessage: { id: assistantMsg.id, content: result.content },
+      })
+    } catch (error) {
+      const isTimeout = error instanceof Error && error.message.includes('timeout')
+      console.error(`[ModelRun ${isTimeout ? 'TIMEOUT' : 'FAILED'}] provider=${provider} model=${actualModel}`, error)
+      await prisma.modelRun.update({
+        where: { id: modelRun.id },
+        data: { status: isTimeout ? 'TIMEOUT' : 'FAILED' },
+      })
 
-          const { model: actualModel, degraded } = await checkAndDegrade(user.id, model, provider)
+      runs.push({
+        id: modelRun.id,
+        model: actualModel,
+        provider,
+        status: isTimeout ? 'TIMEOUT' : 'FAILED',
+        piiMasked: maskResult.maskCount > 0,
+      })
+    }
+  })
 
-          const modelRun = await prisma.modelRun.create({
+  await Promise.allSettled(runPromises)
+
+  // Auto-VERIFY: verify mode で主モデル完了後、自動的に検証モデルを実行
+  const completedRuns = runs.filter(r => r.status === 'COMPLETED')
+  if (mode === 'verify' && completedRuns.length > 0) {
+    const primaryRun = completedRuns[0]
+
+    if (primaryRun.assistantMessage) {
+      const verifier = MODE_DEFAULTS.verify.verifierModel
+      if (keyMap[verifier.provider]) {
+        try {
+          const { model: verifyModel, degraded: verifyDegraded } = await checkAndDegrade(user.id, verifier.model, verifier.provider)
+          const template = HANDOFF_TEMPLATES.VERIFY
+          const verifyPrompt = template.buildPrompt(primaryRun.model, primaryRun.assistantMessage.content)
+          const { masked: maskedVerifyPrompt } = maskPII(verifyPrompt)
+
+          const verifyModelRun = await prisma.modelRun.create({
             data: {
               userMessageId: userMessage.id,
-              provider,
-              model: actualModel,
+              provider: verifier.provider,
+              model: verifyModel,
               status: 'RUNNING',
-              piiMasked: maskResult.maskCount > 0,
+              piiMasked: maskedVerifyPrompt !== verifyPrompt,
             },
           })
 
-          try {
-            const connector = getConnector(provider)
-            const messages = [{ role: 'user' as const, content: maskedContent }]
-            const cfg = {
-              provider,
-              model: actualModel,
-              apiKey: keyMap[provider],
-              maxTokens: settings?.maxTokens ?? 4096,
-              temperature: settings?.temperature ?? 0.7,
-              timeoutMs: 30000,
-            }
+          const verifyConnector = getConnector(verifier.provider)
+          const verifyResult = await verifyConnector.send(
+            [{ role: 'user', content: maskedVerifyPrompt }],
+            { provider: verifier.provider, model: verifyModel, apiKey: keyMap[verifier.provider], maxTokens: 4096, temperature: 0.7, timeoutMs: 30000 }
+          )
+          const verifyCost = verifyConnector.estimateCost(verifyResult.inputTokens, verifyResult.outputTokens, verifyModel)
 
-            const result = await connector.send(messages, cfg)
-            const cost = connector.estimateCost(result.inputTokens, result.outputTokens, actualModel)
+          const [, verifyAssistantMsg] = await Promise.all([
+            prisma.modelRun.update({
+              where: { id: verifyModelRun.id },
+              data: { status: 'COMPLETED', inputTokens: verifyResult.inputTokens, outputTokens: verifyResult.outputTokens, estimatedCostUsd: verifyCost, latencyMs: verifyResult.latencyMs },
+            }),
+            prisma.assistantMessage.create({ data: { modelRunId: verifyModelRun.id, content: verifyResult.content } }),
+            prisma.usageLog.create({
+              data: { userId: user.id, modelRunId: verifyModelRun.id, provider: verifier.provider, model: verifyModel, inputTokens: verifyResult.inputTokens, outputTokens: verifyResult.outputTokens, estimatedCostUsd: verifyCost },
+            }),
+            prisma.handoff.create({
+              data: { roomId, sourceModelRunId: primaryRun.id, targetModelRunId: verifyModelRun.id, templateId: 'verify', templateType: 'VERIFY', composedPrompt: maskedVerifyPrompt },
+            }),
+            logEvent(user.id, roomId, 'handoff', { type: 'AUTO_VERIFY', primaryRunId: primaryRun.id, verifyRunId: verifyModelRun.id, verifyDegraded }),
+          ])
 
-            // Parallelize DB writes
-            const [, assistantMsg] = await Promise.all([
-              prisma.modelRun.update({
-                where: { id: modelRun.id },
-                data: {
-                  status: 'COMPLETED',
-                  inputTokens: result.inputTokens,
-                  outputTokens: result.outputTokens,
-                  estimatedCostUsd: cost,
-                  latencyMs: result.latencyMs,
-                },
-              }),
-              prisma.assistantMessage.create({
-                data: { modelRunId: modelRun.id, content: result.content },
-              }),
-              prisma.usageLog.create({
-                data: {
-                  userId: user.id,
-                  modelRunId: modelRun.id,
-                  provider,
-                  model: actualModel,
-                  inputTokens: result.inputTokens,
-                  outputTokens: result.outputTokens,
-                  estimatedCostUsd: cost,
-                },
-              }),
-              logEvent(user.id, roomId, 'model_run', {
-                modelRunId: modelRun.id,
-                model: actualModel,
-                status: 'COMPLETED',
-                cost,
-                degraded,
-              }, maskedContent),
-              cost > 0
-                ? logEvent(user.id, roomId, 'cost', {
-                    modelRunId: modelRun.id,
-                    model: actualModel,
-                    cost,
-                  })
-                : Promise.resolve(),
-            ])
-
-            // Emit run event immediately
-            send({
-              type: 'run',
-              run: {
-                id: modelRun.id,
-                model: actualModel,
-                provider,
-                status: 'COMPLETED',
-                inputTokens: result.inputTokens,
-                outputTokens: result.outputTokens,
-                estimatedCostUsd: cost,
-                latencyMs: result.latencyMs,
-                piiMasked: maskResult.maskCount > 0,
-                assistantMessage: { id: assistantMsg.id, content: result.content },
-              },
-            })
-
-            completedRunIds.push(modelRun.id)
-            return modelRun.id
-          } catch (error) {
-            const isTimeout = error instanceof Error && error.message.includes('timeout')
-            console.error(`[ModelRun ${isTimeout ? 'TIMEOUT' : 'FAILED'}] provider=${provider} model=${actualModel}`, error)
-            await prisma.modelRun.update({
-              where: { id: modelRun.id },
-              data: { status: isTimeout ? 'TIMEOUT' : 'FAILED' },
-            })
-
-            // Emit failed run event
-            send({
-              type: 'run',
-              run: {
-                id: modelRun.id,
-                model: actualModel,
-                provider,
-                status: isTimeout ? 'TIMEOUT' : 'FAILED',
-                piiMasked: maskResult.maskCount > 0,
-              },
-            })
-
-            return null
-          }
-        })
-
-        await Promise.allSettled(runPromises)
-
-        // Auto-VERIFY: verify mode - run verification model after primary completes
-        if (mode === 'verify' && completedRunIds.length > 0) {
-          const primaryRunId = completedRunIds[0]!
-          const primaryRun = await prisma.modelRun.findUnique({
-            where: { id: primaryRunId },
-            include: { assistantMessage: true },
+          runs.push({
+            id: verifyModelRun.id,
+            model: verifyModel,
+            provider: verifier.provider,
+            status: 'COMPLETED',
+            inputTokens: verifyResult.inputTokens,
+            outputTokens: verifyResult.outputTokens,
+            estimatedCostUsd: verifyCost,
+            latencyMs: verifyResult.latencyMs,
+            piiMasked: maskedVerifyPrompt !== verifyPrompt,
+            assistantMessage: { id: verifyAssistantMsg.id, content: verifyResult.content },
+            handoffInfo: { sourceModelRunId: primaryRun.id, templateType: 'VERIFY' },
           })
-
-          if (primaryRun?.assistantMessage) {
-            const verifier = MODE_DEFAULTS.verify.verifierModel
-            if (keyMap[verifier.provider]) {
-              try {
-                const { model: verifyModel, degraded: verifyDegraded } = await checkAndDegrade(user.id, verifier.model, verifier.provider)
-                const template = HANDOFF_TEMPLATES.VERIFY
-                const verifyPrompt = template.buildPrompt(primaryRun.model, primaryRun.assistantMessage.content)
-                const { masked: maskedVerifyPrompt } = maskPII(verifyPrompt)
-
-                const verifyModelRun = await prisma.modelRun.create({
-                  data: {
-                    userMessageId: userMessage.id,
-                    provider: verifier.provider,
-                    model: verifyModel,
-                    status: 'RUNNING',
-                    piiMasked: maskedVerifyPrompt !== verifyPrompt,
-                  },
-                })
-
-                const verifyConnector = getConnector(verifier.provider)
-                const verifyResult = await verifyConnector.send(
-                  [{ role: 'user', content: maskedVerifyPrompt }],
-                  { provider: verifier.provider, model: verifyModel, apiKey: keyMap[verifier.provider], maxTokens: 4096, temperature: 0.7, timeoutMs: 30000 }
-                )
-                const verifyCost = verifyConnector.estimateCost(verifyResult.inputTokens, verifyResult.outputTokens, verifyModel)
-
-                const [, verifyAssistantMsg] = await Promise.all([
-                  prisma.modelRun.update({
-                    where: { id: verifyModelRun.id },
-                    data: { status: 'COMPLETED', inputTokens: verifyResult.inputTokens, outputTokens: verifyResult.outputTokens, estimatedCostUsd: verifyCost, latencyMs: verifyResult.latencyMs },
-                  }),
-                  prisma.assistantMessage.create({ data: { modelRunId: verifyModelRun.id, content: verifyResult.content } }),
-                  prisma.usageLog.create({
-                    data: { userId: user.id, modelRunId: verifyModelRun.id, provider: verifier.provider, model: verifyModel, inputTokens: verifyResult.inputTokens, outputTokens: verifyResult.outputTokens, estimatedCostUsd: verifyCost },
-                  }),
-                  prisma.handoff.create({
-                    data: { roomId, sourceModelRunId: primaryRunId, targetModelRunId: verifyModelRun.id, templateId: 'verify', templateType: 'VERIFY', composedPrompt: maskedVerifyPrompt },
-                  }),
-                  logEvent(user.id, roomId, 'handoff', { type: 'AUTO_VERIFY', primaryRunId, verifyRunId: verifyModelRun.id, verifyDegraded }),
-                ])
-
-                // Emit verify run event
-                send({
-                  type: 'run',
-                  run: {
-                    id: verifyModelRun.id,
-                    model: verifyModel,
-                    provider: verifier.provider,
-                    status: 'COMPLETED',
-                    inputTokens: verifyResult.inputTokens,
-                    outputTokens: verifyResult.outputTokens,
-                    estimatedCostUsd: verifyCost,
-                    latencyMs: verifyResult.latencyMs,
-                    piiMasked: maskedVerifyPrompt !== verifyPrompt,
-                    assistantMessage: { id: verifyAssistantMsg.id, content: verifyResult.content },
-                    handoffInfo: { sourceModelRunId: primaryRunId, templateType: 'VERIFY' },
-                  },
-                })
-              } catch (err) {
-                console.error('[Auto-VERIFY failed]', err)
-              }
-            }
-          }
+        } catch (err) {
+          console.error('[Auto-VERIFY failed]', err)
         }
-
-        // Done event
-        send({ type: 'done' })
-      } catch (err) {
-        console.error('[SSE stream error]', err)
-        try {
-          send({ type: 'error', error: 'ストリーム処理中にエラーが発生しました' })
-        } catch {
-          // controller may already be closed
-        }
-      } finally {
-        controller.close()
       }
-    },
-  })
+    }
+  }
 
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-    },
+  return NextResponse.json({
+    userMessageId: userMessage.id,
+    runs,
   })
 }
