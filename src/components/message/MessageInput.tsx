@@ -45,11 +45,11 @@ export function MessageInput({ roomId }: MessageInputProps) {
   return (
     <div className="border-t border-gray-200 bg-white p-4">
       {/* Mode selector - horizontally scrollable on mobile */}
-      <div className="flex gap-2 mb-3 overflow-x-auto flex-nowrap pb-1">
+      <div className="flex gap-2 mb-3 flex-wrap">
         <button
           onClick={() => setMode(null)}
           className={cn(
-            'px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0',
+            'px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap',
             mode === null ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
           )}
         >
@@ -58,7 +58,7 @@ export function MessageInput({ roomId }: MessageInputProps) {
         <button
           onClick={() => setMode('verify')}
           className={cn(
-            'flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0',
+            'flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap',
             mode === 'verify' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
           )}
         >
@@ -67,7 +67,7 @@ export function MessageInput({ roomId }: MessageInputProps) {
         <button
           onClick={() => setMode('multi')}
           className={cn(
-            'flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0',
+            'flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap',
             mode === 'multi' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
           )}
         >
@@ -76,7 +76,7 @@ export function MessageInput({ roomId }: MessageInputProps) {
 
         {/* Model chips or auto-select indicator */}
         {mode === null ? (
-          <div className="relative shrink-0">
+          <div className="relative">
             <button
               onClick={() => setShowModelPicker(!showModelPicker)}
               className="flex items-center gap-1 px-3 py-1 rounded-full text-xs bg-gray-100 text-gray-600 hover:bg-gray-200 whitespace-nowrap"
@@ -87,7 +87,7 @@ export function MessageInput({ roomId }: MessageInputProps) {
               <ChevronDown size={11} className={cn('transition-transform', showModelPicker && 'rotate-180')} />
             </button>
             {showModelPicker && (
-              <div className="absolute bottom-full left-0 mb-2 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-10 min-w-[200px]">
+              <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-50 min-w-[200px]">
                 {SUPPORTED_MODELS.map(m => (
                   <label key={m.model} className="flex items-center gap-2 px-2 py-1 hover:bg-gray-50 rounded cursor-pointer text-sm">
                     <input
@@ -102,7 +102,7 @@ export function MessageInput({ roomId }: MessageInputProps) {
             )}
           </div>
         ) : (
-          <span className="flex items-center px-3 py-1 rounded-full text-xs bg-gray-50 text-gray-400 whitespace-nowrap shrink-0">
+          <span className="flex items-center px-3 py-1 rounded-full text-xs bg-gray-50 text-gray-400 whitespace-nowrap">
             自動選択
           </span>
         )}
