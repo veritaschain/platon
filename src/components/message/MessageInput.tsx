@@ -21,6 +21,7 @@ export function MessageInput({ roomId }: MessageInputProps) {
   const { isSending, sendMessage } = useMessageStore()
   const { selectedModels, toggleModel, apiKeys } = useConnectorStore()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const pickerBtnRef = useRef<HTMLButtonElement>(null)
   const isComposingRef = useRef(false)
 
   const handleSend = async () => {
@@ -78,6 +79,7 @@ export function MessageInput({ roomId }: MessageInputProps) {
         {mode === null ? (
           <div className="relative">
             <button
+              ref={pickerBtnRef}
               onClick={() => setShowModelPicker(!showModelPicker)}
               className="flex items-center gap-1 px-3 py-1 rounded-full text-xs bg-gray-100 text-gray-600 hover:bg-gray-200 whitespace-nowrap"
             >
@@ -87,18 +89,27 @@ export function MessageInput({ roomId }: MessageInputProps) {
               <ChevronDown size={11} className={cn('transition-transform', showModelPicker && 'rotate-180')} />
             </button>
             {showModelPicker && (
-              <div className="absolute top-full left-0 mt-2 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-50 min-w-[200px]">
-                {SUPPORTED_MODELS.map(m => (
-                  <label key={m.model} className="flex items-center gap-2 px-2 py-1 hover:bg-gray-50 rounded cursor-pointer text-sm">
-                    <input
-                      type="checkbox"
-                      checked={selectedModels.includes(m.model)}
-                      onChange={() => toggleModel(m.model)}
-                    />
-                    {m.label}
-                  </label>
-                ))}
-              </div>
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowModelPicker(false)} />
+                <div
+                  className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg p-2 min-w-[220px]"
+                  style={{
+                    bottom: `${window.innerHeight - (pickerBtnRef.current?.getBoundingClientRect().top ?? 0) + 4}px`,
+                    left: `${pickerBtnRef.current?.getBoundingClientRect().left ?? 0}px`,
+                  }}
+                >
+                  {SUPPORTED_MODELS.map(m => (
+                    <label key={m.model} className="flex items-center gap-2 px-2 py-1.5 hover:bg-gray-50 rounded cursor-pointer text-sm">
+                      <input
+                        type="checkbox"
+                        checked={selectedModels.includes(m.model)}
+                        onChange={() => toggleModel(m.model)}
+                      />
+                      {m.label}
+                    </label>
+                  ))}
+                </div>
+              </>
             )}
           </div>
         ) : (
