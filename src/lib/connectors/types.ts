@@ -1,8 +1,20 @@
 export type Provider = 'OPENAI' | 'ANTHROPIC' | 'GOOGLE' | 'XAI'
 
+export interface ImageAttachment {
+  base64: string
+  mimeType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp'
+}
+
+export const IMAGE_CONSTRAINTS = {
+  maxSizeBytes: 3 * 1024 * 1024, // 3MB (Vercel 4.5MB body limit対策)
+  maxCount: 1,
+  allowedMimeTypes: ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const,
+} as const
+
 export interface ConnectorMessage {
   role: 'user' | 'assistant' | 'system'
   content: string
+  images?: ImageAttachment[]
 }
 
 export interface ConnectorConfig {

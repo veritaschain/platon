@@ -10,10 +10,33 @@ export class AnthropicConnector implements BaseConnector {
     const userMsgs = msgs.filter(m => m.role !== 'system')
     const systemMsg = msgs.find(m => m.role === 'system')?.content
 
+    const formattedMsgs = userMsgs.map(msg => {
+      if (msg.images && msg.images.length > 0 && msg.role === 'user') {
+        const content: Array<
+          | { type: 'text'; text: string }
+          | { type: 'image'; source: { type: 'base64'; media_type: string; data: string } }
+        > = []
+
+        for (const img of msg.images) {
+          content.push({
+            type: 'image',
+            source: { type: 'base64', media_type: img.mimeType, data: img.base64 },
+          })
+        }
+
+        if (msg.content) {
+          content.push({ type: 'text', text: msg.content })
+        }
+
+        return { role: msg.role as 'user' | 'assistant', content }
+      }
+      return { role: msg.role as 'user' | 'assistant', content: msg.content }
+    })
+
     const apiCall = client.messages.create({
       model: cfg.model,
       max_tokens: cfg.maxTokens ?? 4096,
-      messages: userMsgs as { role: 'user' | 'assistant'; content: string }[],
+      messages: formattedMsgs as any,
       ...(systemMsg ? { system: systemMsg } : {}),
     })
 

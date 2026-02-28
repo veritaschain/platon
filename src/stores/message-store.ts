@@ -22,6 +22,7 @@ export interface UserMessage {
   orderIndex: number
   modelRuns: ModelRun[]
   integrateResult?: IntegrateResult | null
+  imagePreview?: string // base64 data URL for transient display
 }
 
 export interface IntegrateResult {
@@ -42,7 +43,7 @@ interface MessageStore {
   isLoading: boolean
   isSending: boolean
   setMessages: (messages: UserMessage[]) => void
-  sendMessage: (roomId: string, content: string, mode?: string, targetModels?: string[]) => Promise<void>
+  sendMessage: (roomId: string, content: string, mode?: string, targetModels?: string[], images?: { base64: string; mimeType: string }[]) => Promise<void>
   executeIntegrate: (userMessageId: string, roomId: string) => Promise<void>
   updateIntegrateResult: (userMessageId: string, result: IntegrateResult) => void
   pollRunStatus: (userMessageId: string) => Promise<void>
@@ -56,7 +57,7 @@ export const useMessageStore = create<MessageStore>((set, get) => ({
 
   setMessages: (messages) => set({ messages }),
 
-  sendMessage: async (roomId, content, mode, targetModels) => {
+  sendMessage: async (roomId, content, mode, targetModels, images) => {
     set({ isSending: true })
 
     // Optimistic update
@@ -68,6 +69,7 @@ export const useMessageStore = create<MessageStore>((set, get) => ({
       mode,
       orderIndex: get().messages.length,
       modelRuns: [],
+      ...(images && images.length > 0 ? { imagePreview: `data:${images[0].mimeType};base64,${images[0].base64}` } : {}),
     }
     set(s => ({ messages: [...s.messages, tempMsg] }))
 
@@ -75,7 +77,7 @@ export const useMessageStore = create<MessageStore>((set, get) => ({
       const res = await fetch('/api/messages/send', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roomId, content, mode, targetModels }),
+        body: JSON.stringify({ roomId, content, mode, targetModels, images }),
       })
 
       let data: Record<string, unknown>

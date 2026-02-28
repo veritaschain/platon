@@ -8,8 +8,8 @@ import { checkAndDegrade } from '@/lib/governance/cost-controller'
 import { logEvent } from '@/lib/governance/event-logger'
 import { checkProviderPolicy } from '@/lib/governance/provider-policy'
 import { HANDOFF_TEMPLATES } from '@/lib/handoff/templates'
-import { SUPPORTED_MODELS } from '@/lib/connectors/types'
-import type { Provider } from '@/lib/connectors/types'
+import { SUPPORTED_MODELS, IMAGE_CONSTRAINTS } from '@/lib/connectors/types'
+import type { Provider, ImageAttachment } from '@/lib/connectors/types'
 
 const MODE_DEFAULTS = {
   verify: {
@@ -32,17 +32,62 @@ export async function POST(req: Request) {
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
   const body = await req.json()
-  const { roomId, content, mode, targetModels, settings } = body
+  const { roomId, content, mode, targetModels, settings, images: rawImages } = body
 
-  // プロバイダーポリシーチェック
-  const policyCheck = checkProviderPolicy(content)
+  // 画像バリデーション
+  let validatedImages: ImageAttachment[] | undefined
+  if (rawImages && Array.isArray(rawImages) && rawImages.length > 0) {
+    if (rawImages.length > IMAGE_CONSTRAINTS.maxCount) {
+      return NextResponse.json(
+        { error: `画像は${IMAGE_CONSTRAINTS.maxCount}枚まで添付できます` },
+        { status: 400 }
+      )
+    }
+
+    for (const img of rawImages) {
+      if (!img.base64 || !img.mimeType) {
+        return NextResponse.json({ error: '不正な画像データです' }, { status: 400 })
+      }
+
+      if (!(IMAGE_CONSTRAINTS.allowedMimeTypes as readonly string[]).includes(img.mimeType)) {
+        return NextResponse.json(
+          { error: `サポートされていない画像形式です: ${img.mimeType}。JPEG, PNG, GIF, WebPのみ対応しています` },
+          { status: 400 }
+        )
+      }
+
+      const sizeBytes = Math.ceil(img.base64.length * 3 / 4)
+      if (sizeBytes > IMAGE_CONSTRAINTS.maxSizeBytes) {
+        const maxMB = IMAGE_CONSTRAINTS.maxSizeBytes / (1024 * 1024)
+        return NextResponse.json(
+          { error: `画像サイズが${maxMB}MBを超えています` },
+          { status: 400 }
+        )
+      }
+    }
+
+    validatedImages = rawImages as ImageAttachment[]
+    await logEvent(user.id, roomId, 'image_attachment', {
+      count: validatedImages.length,
+      mimeTypes: validatedImages.map(i => i.mimeType),
+    })
+  }
+
+  // テキストも画像もない場合はエラー
+  const textContent = content ?? ''
+  if (!textContent.trim() && !validatedImages) {
+    return NextResponse.json({ error: 'メッセージまたは画像を入力してください' }, { status: 400 })
+  }
+
+  // プロバイダーポリシーチェック（テキストのみ対象）
+  const policyCheck = checkProviderPolicy(textContent)
   if (policyCheck.blocked) {
     await logEvent(user.id, roomId, 'provider_block', { reason: policyCheck.reason })
     return NextResponse.json({ error: policyCheck.reason }, { status: 400 })
   }
 
-  // PIIマスキング
-  const maskResult = maskPII(content)
+  // PIIマスキング（テキストのみ対象、画像はバイパス）
+  const maskResult = maskPII(textContent)
   const maskedContent = maskResult.masked
   if (maskResult.maskCount > 0) {
     await logEvent(user.id, roomId, 'pii_mask', {
@@ -158,7 +203,7 @@ export async function POST(req: Request) {
 
     try {
       const connector = getConnector(provider)
-      const messages = [{ role: 'user' as const, content: maskedContent }]
+      const messages = [{ role: 'user' as const, content: maskedContent, ...(validatedImages ? { images: validatedImages } : {}) }]
       const cfg = {
         provider,
         model: actualModel,

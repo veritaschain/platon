@@ -1,6 +1,7 @@
 import OpenAI from 'openai'
 import type { BaseConnector, ConnectorConfig, ConnectorMessage, ConnectorResponse } from './types'
 import { MODEL_PRICING } from './types'
+import { formatOpenAIMessages } from './format-helpers'
 
 export class OpenAIConnector implements BaseConnector {
   async send(msgs: ConnectorMessage[], cfg: ConnectorConfig): Promise<ConnectorResponse> {
@@ -10,7 +11,7 @@ export class OpenAIConnector implements BaseConnector {
 
     const apiCall = client.chat.completions.create({
       model: cfg.model,
-      messages: msgs,
+      messages: formatOpenAIMessages(msgs) as any,
       max_tokens: cfg.maxTokens ?? 4096,
       temperature: cfg.temperature ?? 0.7,
     })

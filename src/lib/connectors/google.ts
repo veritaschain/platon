@@ -15,7 +15,18 @@ export class GoogleConnector implements BaseConnector {
     const lastMsg = msgs[msgs.length - 1]
     const chat = model.startChat({ history })
 
-    const apiCall = chat.sendMessage(lastMsg.content)
+    // Build parts for the last message (may include images)
+    const lastParts: Array<{ text: string } | { inlineData: { mimeType: string; data: string } }> = []
+    if (lastMsg.images && lastMsg.images.length > 0) {
+      for (const img of lastMsg.images) {
+        lastParts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } })
+      }
+    }
+    if (lastMsg.content) {
+      lastParts.push({ text: lastMsg.content })
+    }
+
+    const apiCall = chat.sendMessage(lastParts.length === 1 && 'text' in lastParts[0] ? lastMsg.content : lastParts)
     const timeout = new Promise<never>((_, reject) =>
       setTimeout(() => reject(new Error(`Google timeout after ${timeoutMs}ms`)), timeoutMs)
     )
