@@ -21,7 +21,7 @@ const MODE_DEFAULTS = {
       { provider: 'OPENAI' as Provider, model: 'gpt-4o' },
       { provider: 'ANTHROPIC' as Provider, model: 'claude-sonnet-4-20250514' },
       { provider: 'GOOGLE' as Provider, model: 'gemini-2.5-flash' },
-      { provider: 'XAI' as Provider, model: 'grok-3' },
+      { provider: 'XAI' as Provider, model: 'grok-4' },
     ],
   },
 }

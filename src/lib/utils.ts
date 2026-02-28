@@ -64,7 +64,7 @@ export function getModelLabel(model: string): string {
     'claude-haiku-4-5-20251001': 'Claude Haiku 4.5',
     'gemini-2.5-flash': 'Gemini 2.5 Flash',
     'gemini-2.5-pro': 'Gemini 2.5 Pro',
-    'grok-3': 'Grok-3',
+    'grok-4': 'Grok-4',
   }
   return labels[model] ?? model
 }
