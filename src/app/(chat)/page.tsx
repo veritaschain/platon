@@ -6,13 +6,15 @@ import { useConnectorStore } from '@/stores/connector-store'
 import { MessageThread } from '@/components/message/MessageThread'
 import { MessageInput } from '@/components/message/MessageInput'
 import { RightPanel } from '@/components/common/RightPanel'
-import { Settings } from 'lucide-react'
+import { Settings, Menu } from 'lucide-react'
 import Link from 'next/link'
+import { useSidebarContext } from './chat-shell'
 
 export default function ChatPage() {
   const { activeRoomId, createRoom } = useRoomStore()
   const { messages, setMessages } = useMessageStore()
-  const { advancedMode, setAdvancedMode, fetchApiKeys } = useConnectorStore()
+  const { fetchApiKeys } = useConnectorStore()
+  const { openSidebar } = useSidebarContext()
 
   useEffect(() => { fetchApiKeys() }, [])
 
@@ -73,19 +75,20 @@ export default function ChatPage() {
       <div className="flex-1 flex flex-col min-w-0">
         {/* Topbar */}
         <div className="flex items-center justify-between px-4 py-2 border-b border-gray-200 bg-white">
-          <div className="text-sm text-gray-600">
-            {activeRoomId ? '会話中' : 'ルームを選択してください'}
+          <div className="flex items-center gap-3">
+            {/* Hamburger menu for mobile */}
+            <button
+              onClick={openSidebar}
+              className="p-1.5 rounded-md hover:bg-gray-100 text-gray-600 md:hidden"
+              title="メニュー"
+            >
+              <Menu size={18} />
+            </button>
+            <div className="text-sm text-gray-600">
+              {activeRoomId ? '会話中' : 'ルームを選択してください'}
+            </div>
           </div>
           <div className="flex items-center gap-3">
-            <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={advancedMode}
-                onChange={(e) => setAdvancedMode(e.target.checked)}
-                className="rounded"
-              />
-              上級者モード
-            </label>
             <Link href="/settings" className="text-gray-400 hover:text-gray-600">
               <Settings size={16} />
             </Link>

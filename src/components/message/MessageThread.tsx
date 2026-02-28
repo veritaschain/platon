@@ -1,7 +1,6 @@
 'use client'
 import { useEffect, useRef, useState, useMemo } from 'react'
 import { useMessageStore, type ModelRun } from '@/stores/message-store'
-import { useConnectorStore } from '@/stores/connector-store'
 import { ResponseCard } from './ResponseCard'
 import { HandoffComment } from './HandoffComment'
 import { IntegrateCard } from '@/components/integrate/IntegrateCard'
@@ -69,7 +68,6 @@ function splitRuns(runs: ModelRun[]) {
 
 export function MessageThread({ roomId, messages }: MessageThreadProps) {
   const { executeIntegrate, setMessages } = useMessageStore()
-  const { advancedMode } = useConnectorStore()
   const bottomRef = useRef<HTMLDivElement>(null)
   const [handoffDialog, setHandoffDialog] = useState<{ runId: string; model: string; type: 'verify' | 'debate' } | null>(null)
   const [integratingIds, setIntegratingIds] = useState<Set<string>>(new Set())
@@ -194,9 +192,9 @@ export function MessageThread({ roomId, messages }: MessageThreadProps) {
                 <div key={run.id}>
                   <ResponseCard
                     run={run}
-                    showHandoffButtons={advancedMode && run.status === 'COMPLETED'}
-                    onVerify={advancedMode ? () => handleVerify(run.id, run.model) : undefined}
-                    onDebate={advancedMode ? () => handleDebate(run.id, run.model) : undefined}
+                    showHandoffButtons={run.status === 'COMPLETED'}
+                    onVerify={() => handleVerify(run.id, run.model)}
+                    onDebate={() => handleDebate(run.id, run.model)}
                   />
 
                   {/* Handoff results as collapsible comments */}

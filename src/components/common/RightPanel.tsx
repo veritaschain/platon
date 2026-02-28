@@ -4,7 +4,7 @@ import { useUsageStore } from '@/stores/usage-store'
 import { useHandoffStore, type HandoffResult } from '@/stores/handoff-store'
 import { useRoomStore } from '@/stores/room-store'
 import { DollarSign, TrendingUp, ArrowRightLeft, CheckCircle, Swords, Sparkles } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { cn, formatCostMulti } from '@/lib/utils'
 
 const TEMPLATE_LABELS: Record<string, { label: string; icon: typeof CheckCircle; color: string }> = {
   VERIFY: { label: '検証', icon: CheckCircle, color: 'text-blue-600' },
@@ -13,21 +13,35 @@ const TEMPLATE_LABELS: Record<string, { label: string; icon: typeof CheckCircle;
 }
 
 export function RightPanel() {
-  const { daily, monthly, dailyPercent, monthlyPercent, limits, fetchUsage } = useUsageStore()
+  const { daily, monthly, dailyPercent, monthlyPercent, limits, selectedCurrency, exchangeRates, cycleCurrency, fetchUsage, fetchExchangeRates } = useUsageStore()
   const { handoffs, fetchHandoffs, setActiveHandoff } = useHandoffStore()
   const { activeRoomId } = useRoomStore()
 
-  useEffect(() => { fetchUsage() }, [])
+  useEffect(() => {
+    fetchUsage()
+    fetchExchangeRates()
+  }, [])
   useEffect(() => {
     if (activeRoomId) fetchHandoffs(activeRoomId)
   }, [activeRoomId])
 
+  const currencySymbols: Record<string, string> = { USD: '$', JPY: '¥', EUR: '€', CNY: '¥', GBP: '£' }
+
   return (
     <aside className="w-[320px] border-l border-gray-200 bg-gray-50 p-4 overflow-y-auto hidden xl:block">
       {/* コストダッシュボード */}
-      <h3 className="font-semibold text-sm text-gray-700 mb-4 flex items-center gap-2">
-        <DollarSign size={15} />コストダッシュボード
-      </h3>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-semibold text-sm text-gray-700 flex items-center gap-2">
+          <DollarSign size={15} />コストダッシュボード
+        </h3>
+        <button
+          onClick={cycleCurrency}
+          className="text-xs text-gray-500 hover:text-gray-800 px-2 py-0.5 rounded border border-gray-200 hover:border-gray-400 transition-colors"
+          title="通貨切替"
+        >
+          {currencySymbols[selectedCurrency]}{selectedCurrency}
+        </button>
+      </div>
 
       <div className="space-y-4">
         <CostMeter
@@ -35,12 +49,16 @@ export function RightPanel() {
           used={daily}
           limit={limits.DAILY_USD}
           percent={dailyPercent}
+          currency={selectedCurrency}
+          rates={exchangeRates}
         />
         <CostMeter
           label="今月"
           used={monthly}
           limit={limits.MONTHLY_USD}
           percent={monthlyPercent}
+          currency={selectedCurrency}
+          rates={exchangeRates}
         />
       </div>
 
@@ -128,13 +146,20 @@ function HandoffItem({ handoff, onClick }: { handoff: HandoffResult; onClick: ()
   )
 }
 
-function CostMeter({ label, used, limit, percent }: { label: string; used: number; limit: number; percent: number }) {
+function CostMeter({ label, used, limit, percent, currency, rates }: {
+  label: string
+  used: number
+  limit: number
+  percent: number
+  currency: string
+  rates: Record<string, number>
+}) {
   const color = percent >= 80 ? 'bg-red-500' : percent >= 60 ? 'bg-yellow-400' : 'bg-green-500'
   return (
     <div>
       <div className="flex justify-between text-xs text-gray-600 mb-1">
         <span>{label}</span>
-        <span>${used.toFixed(4)} / ${limit}</span>
+        <span>{formatCostMulti(used, currency, rates)} / {formatCostMulti(limit, currency, rates)}</span>
       </div>
       <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
         <div

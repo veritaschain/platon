@@ -25,7 +25,7 @@ export const useConnectorStore = create<ConnectorStore>((set, get) => ({
   availableModels: SUPPORTED_MODELS,
   selectedModels: ['gpt-4o'],
   apiKeys: [],
-  advancedMode: false,
+  advancedMode: true,
 
   fetchApiKeys: async () => {
     const res = await fetch('/api/connectors/keys')

@@ -35,6 +35,26 @@ export function getProviderBg(provider: string): string {
   }
 }
 
+export function formatCostMulti(
+  usd: number,
+  currency: string,
+  rates: Record<string, number>
+): string {
+  if (currency === 'USD') {
+    if (usd < 0.001) return '<$0.001'
+    return `$${usd.toFixed(4)}`
+  }
+  const rate = rates[currency] ?? 1
+  const converted = usd * rate
+  switch (currency) {
+    case 'JPY': return `¥${converted.toFixed(2)}`
+    case 'EUR': return `€${converted.toFixed(4)}`
+    case 'CNY': return `CN¥${converted.toFixed(3)}`
+    case 'GBP': return `£${converted.toFixed(4)}`
+    default: return `$${usd.toFixed(4)}`
+  }
+}
+
 export function getModelLabel(model: string): string {
   const labels: Record<string, string> = {
     'gpt-4o': 'GPT-4o',

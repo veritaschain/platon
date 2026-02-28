@@ -1,11 +1,12 @@
 'use client'
 import { useState, useRef, KeyboardEvent, useCallback } from 'react'
-import { Send, Zap, LayoutGrid, ChevronDown } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { Send, Zap, LayoutGrid, ChevronDown, Settings } from 'lucide-react'
+import { cn, getModelLabel } from '@/lib/utils'
 import { Button } from '@/components/common/Button'
 import { useMessageStore } from '@/stores/message-store'
 import { useConnectorStore } from '@/stores/connector-store'
 import { SUPPORTED_MODELS } from '@/lib/connectors/types'
+import Link from 'next/link'
 
 type Mode = null | 'verify' | 'multi'
 
@@ -18,7 +19,7 @@ export function MessageInput({ roomId }: MessageInputProps) {
   const [mode, setMode] = useState<Mode>(null)
   const [showModelPicker, setShowModelPicker] = useState(false)
   const { isSending, sendMessage } = useMessageStore()
-  const { selectedModels, toggleModel, advancedMode, apiKeys } = useConnectorStore()
+  const { selectedModels, toggleModel, apiKeys } = useConnectorStore()
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const isComposingRef = useRef(false)
 
@@ -43,12 +44,12 @@ export function MessageInput({ roomId }: MessageInputProps) {
 
   return (
     <div className="border-t border-gray-200 bg-white p-4">
-      {/* Mode selector */}
-      <div className="flex gap-2 mb-3">
+      {/* Mode selector - horizontally scrollable on mobile */}
+      <div className="flex gap-2 mb-3 overflow-x-auto flex-nowrap pb-1">
         <button
           onClick={() => setMode(null)}
           className={cn(
-            'px-3 py-1 rounded-full text-xs font-medium transition-colors',
+            'px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0',
             mode === null ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
           )}
         >
@@ -57,7 +58,7 @@ export function MessageInput({ roomId }: MessageInputProps) {
         <button
           onClick={() => setMode('verify')}
           className={cn(
-            'flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors',
+            'flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0',
             mode === 'verify' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
           )}
         >
@@ -66,20 +67,24 @@ export function MessageInput({ roomId }: MessageInputProps) {
         <button
           onClick={() => setMode('multi')}
           className={cn(
-            'flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors',
+            'flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap shrink-0',
             mode === 'multi' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
           )}
         >
           <LayoutGrid size={11} />多角的レビュー
         </button>
 
-        {advancedMode && mode === null && (
-          <div className="relative">
+        {/* Model chips or auto-select indicator */}
+        {mode === null ? (
+          <div className="relative shrink-0">
             <button
               onClick={() => setShowModelPicker(!showModelPicker)}
-              className="flex items-center gap-1 px-3 py-1 rounded-full text-xs bg-gray-100 text-gray-600 hover:bg-gray-200"
+              className="flex items-center gap-1 px-3 py-1 rounded-full text-xs bg-gray-100 text-gray-600 hover:bg-gray-200 whitespace-nowrap"
             >
-              モデル選択 ({selectedModels.length}) <ChevronDown size={11} />
+              {selectedModels.length > 0
+                ? selectedModels.map(m => getModelLabel(m)).join(', ')
+                : 'モデル選択'}
+              <ChevronDown size={11} className={cn('transition-transform', showModelPicker && 'rotate-180')} />
             </button>
             {showModelPicker && (
               <div className="absolute bottom-full left-0 mb-2 bg-white border border-gray-200 rounded-lg shadow-lg p-2 z-10 min-w-[200px]">
@@ -96,12 +101,39 @@ export function MessageInput({ roomId }: MessageInputProps) {
               </div>
             )}
           </div>
+        ) : (
+          <span className="flex items-center px-3 py-1 rounded-full text-xs bg-gray-50 text-gray-400 whitespace-nowrap shrink-0">
+            自動選択
+          </span>
         )}
       </div>
 
+      {/* Selected model chips (wrapping) */}
+      {mode === null && selectedModels.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {selectedModels.map(m => (
+            <span
+              key={m}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] bg-gray-100 text-gray-600"
+            >
+              {getModelLabel(m)}
+              <button
+                onClick={() => toggleModel(m)}
+                className="hover:text-red-500 ml-0.5"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
       {!hasApiKey && (
         <div className="mb-2 text-xs text-amber-600 bg-amber-50 px-3 py-2 rounded-md">
-          APIキーが未設定です。設定画面でAPIキーを登録してください。
+          APIキーが未設定です。
+          <Link href="/settings" className="underline font-medium hover:text-amber-800 ml-1">
+            設定画面でAPIキーを登録 →
+          </Link>
         </div>
       )}
 
@@ -131,6 +163,17 @@ export function MessageInput({ roomId }: MessageInputProps) {
             <Send size={16} />
           )}
         </Button>
+      </div>
+
+      {/* API key settings link (always visible) */}
+      <div className="mt-1.5 flex justify-end">
+        <Link
+          href="/settings"
+          className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-600 transition-colors"
+        >
+          <Settings size={10} />
+          APIキー設定
+        </Link>
       </div>
     </div>
   )

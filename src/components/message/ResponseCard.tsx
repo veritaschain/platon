@@ -1,8 +1,8 @@
 'use client'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Copy, CheckCircle, Shield, Clock, Zap } from 'lucide-react'
-import { useState } from 'react'
+import { Copy, CheckCircle, Shield, Clock, Zap, Brain } from 'lucide-react'
+import { useState, useEffect, useRef } from 'react'
 import type { ModelRun } from '@/stores/message-store'
 import { cn, formatCost, formatTokens, getModelLabel, getProviderBg, getProviderColor } from '@/lib/utils'
 import { Button } from '@/components/common/Button'
@@ -12,6 +12,60 @@ interface ResponseCardProps {
   showHandoffButtons?: boolean
   onVerify?: (runId: string) => void
   onDebate?: (runId: string) => void
+}
+
+const TIMEOUT_MS = 30_000
+
+function ThinkingIndicator({ provider, model }: { provider: string; model: string }) {
+  const [elapsed, setElapsed] = useState(0)
+  const [dotCount, setDotCount] = useState(1)
+  const startRef = useRef(Date.now())
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setElapsed(Date.now() - startRef.current)
+      setDotCount(d => (d % 3) + 1)
+    }, 100)
+    return () => clearInterval(timer)
+  }, [])
+
+  const elapsedSec = elapsed / 1000
+  const percent = Math.min((elapsed / TIMEOUT_MS) * 100, 100)
+  const barColor = percent >= 80 ? 'bg-red-500' : percent >= 60 ? 'bg-yellow-400' : 'bg-green-500'
+  const dots = '.'.repeat(dotCount)
+
+  return (
+    <div className={cn('rounded-lg border p-4', getProviderBg(provider))}>
+      {/* Header with brain icon, model name, thinking text, elapsed */}
+      <div className="flex items-center gap-2 mb-3">
+        <Brain size={16} className={cn(getProviderColor(provider), 'animate-pulse')} />
+        <span className={cn('font-medium text-sm', getProviderColor(provider))}>
+          {getModelLabel(model)}
+        </span>
+        <span className="text-xs text-gray-500">
+          思考中{dots}
+        </span>
+        <span className="text-xs text-gray-400 ml-auto tabular-nums">
+          {elapsedSec.toFixed(1)}s
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      <div className="h-1.5 bg-gray-200 rounded-full overflow-hidden mb-3">
+        <div
+          className={cn('h-full rounded-full transition-all duration-100', barColor)}
+          style={{ width: `${percent}%` }}
+        />
+      </div>
+
+      {/* Skeleton lines */}
+      <div className="space-y-2">
+        <div className="h-3 bg-gray-200 rounded animate-pulse w-full" />
+        <div className="h-3 bg-gray-200 rounded animate-pulse w-3/4" />
+        <div className="h-3 bg-gray-200 rounded animate-pulse w-5/6" />
+      </div>
+    </div>
+  )
 }
 
 export function ResponseCard({ run, showHandoffButtons, onVerify, onDebate }: ResponseCardProps) {
@@ -24,21 +78,7 @@ export function ResponseCard({ run, showHandoffButtons, onVerify, onDebate }: Re
   }
 
   if (run.status === 'RUNNING' || run.status === 'PENDING') {
-    return (
-      <div className={cn('rounded-lg border p-4', getProviderBg(run.provider))}>
-        <div className="flex items-center gap-2 mb-3">
-          <span className={cn('font-medium text-sm', getProviderColor(run.provider))}>
-            {getModelLabel(run.model)}
-          </span>
-          <span className="text-xs text-gray-400 animate-pulse">生成中...</span>
-        </div>
-        <div className="space-y-2">
-          <div className="h-3 bg-gray-200 rounded animate-pulse w-full" />
-          <div className="h-3 bg-gray-200 rounded animate-pulse w-3/4" />
-          <div className="h-3 bg-gray-200 rounded animate-pulse w-5/6" />
-        </div>
-      </div>
-    )
+    return <ThinkingIndicator provider={run.provider} model={run.model} />
   }
 
   if (run.status === 'FAILED' || run.status === 'TIMEOUT') {
