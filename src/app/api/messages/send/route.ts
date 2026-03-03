@@ -270,9 +270,10 @@ export async function POST(req: Request) {
         piiMasked: maskResult.maskCount > 0,
         assistantMessage: { id: assistantMsg.id, content: result.content },
       })
-    } catch (error) {
+    } catch (error: any) {
       const isTimeout = error instanceof Error && error.message.includes('timeout')
-      console.error(`[ModelRun ${isTimeout ? 'TIMEOUT' : 'FAILED'}] provider=${provider} model=${actualModel}`, error)
+      const errorMsg = error?.message ?? error?.error?.message ?? String(error)
+      console.error(`[ModelRun ${isTimeout ? 'TIMEOUT' : 'FAILED'}] provider=${provider} model=${actualModel}`, errorMsg)
       await prisma.modelRun.update({
         where: { id: modelRun.id },
         data: { status: isTimeout ? 'TIMEOUT' : 'FAILED' },
@@ -284,6 +285,7 @@ export async function POST(req: Request) {
         provider,
         status: isTimeout ? 'TIMEOUT' : 'FAILED',
         piiMasked: maskResult.maskCount > 0,
+        assistantMessage: { id: '', content: errorMsg },
       })
     }
   })
