@@ -196,7 +196,7 @@ export function MessageThread({ roomId, messages }: MessageThreadProps) {
             </div>
 
             {/* AI responses - only originals in grid */}
-            <div className={`grid gap-3 ${originals.length > 1 ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1 max-w-3xl'}`}>
+            <div className={`grid gap-3 ${originals.length > 2 ? 'grid-cols-1 lg:grid-cols-2 xl:grid-cols-3' : originals.length > 1 ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1 max-w-3xl'}`}>
               {originals.map(run => (
                 <div key={run.id}>
                   <ResponseCard
