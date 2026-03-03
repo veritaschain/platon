@@ -48,7 +48,7 @@ export const MODEL_PRICING: Record<string, { input: number; output: number }> = 
   'claude-haiku-4-5-20251001': { input: 0.80,  output: 4.00  },
   'gemini-2.5-flash':          { input: 0.10,  output: 0.40  },
   'gemini-2.5-pro':            { input: 1.25,  output: 5.00  },
-  'grok-4':                    { input: 3.00,  output: 15.00 },
+  'grok-4-fast-non-reasoning': { input: 0.20,  output: 0.50  },
 }
 
 export const SUPPORTED_MODELS = [
@@ -59,5 +59,5 @@ export const SUPPORTED_MODELS = [
   { provider: 'ANTHROPIC' as Provider, model: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5', tier: 'lite' },
   { provider: 'GOOGLE' as Provider,    model: 'gemini-2.5-flash',          label: 'Gemini 2.5 Flash', tier: 'lite' },
   { provider: 'GOOGLE' as Provider,    model: 'gemini-2.5-pro',            label: 'Gemini 2.5 Pro',   tier: 'pro'  },
-  { provider: 'XAI' as Provider,      model: 'grok-4',                    label: 'Grok-4',           tier: 'pro'  },
+  { provider: 'XAI' as Provider,      model: 'grok-4-fast-non-reasoning', label: 'Grok-4 Fast',      tier: 'lite' },
 ]

@@ -46,7 +46,7 @@ export async function GET() {
     })
 
     const completion = await client.chat.completions.create({
-      model: 'grok-4',
+      model: 'grok-4-fast-non-reasoning',
       messages: [
         {
           role: 'user',

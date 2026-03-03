@@ -39,7 +39,7 @@ export class XAIConnector implements BaseConnector {
     try {
       const client = new OpenAI({ apiKey: key, baseURL: 'https://api.x.ai/v1' })
       await client.chat.completions.create({
-        model: 'grok-4',
+        model: 'grok-4-fast-non-reasoning',
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 1,
       })
