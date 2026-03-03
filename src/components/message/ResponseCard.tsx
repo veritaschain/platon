@@ -93,6 +93,9 @@ export function ResponseCard({ run, showHandoffButtons, onVerify, onDebate }: Re
         {run.assistantMessage?.content && (
           <p className="text-xs text-red-600 mt-2">{run.assistantMessage.content}</p>
         )}
+        <pre className="text-[10px] text-red-400 mt-2 whitespace-pre-wrap break-all bg-red-100 rounded p-2 max-h-40 overflow-auto">
+          {JSON.stringify(run, null, 2)}
+        </pre>
       </div>
     )
   }
