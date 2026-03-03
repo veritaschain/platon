@@ -5,7 +5,7 @@ import { formatOpenAIMessages } from './format-helpers'
 
 export class XAIConnector implements BaseConnector {
   async send(msgs: ConnectorMessage[], cfg: ConnectorConfig): Promise<ConnectorResponse> {
-    const timeoutMs = cfg.timeoutMs ?? 30000
+    const timeoutMs = cfg.timeoutMs ?? 8000
     const client = new OpenAI({
       apiKey: cfg.apiKey,
       baseURL: 'https://api.x.ai/v1',
@@ -14,13 +14,19 @@ export class XAIConnector implements BaseConnector {
     })
     const start = Date.now()
 
-    const res = await client.chat.completions.create({
+    const apiCall = client.chat.completions.create({
       model: cfg.model,
       messages: formatOpenAIMessages(msgs) as any,
       max_tokens: cfg.maxTokens ?? 4096,
       temperature: cfg.temperature ?? 0.7,
     })
 
+    // 二重安全弁: SDK timeout + 手動 Promise.race
+    const hardTimeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`xAI timeout after ${timeoutMs}ms`)), timeoutMs)
+    )
+
+    const res = await Promise.race([apiCall, hardTimeout])
     return {
       content: res.choices[0]?.message?.content ?? '',
       inputTokens: res.usage?.prompt_tokens ?? 0,
@@ -41,7 +47,7 @@ export class XAIConnector implements BaseConnector {
         apiKey: key,
         baseURL: 'https://api.x.ai/v1',
         maxRetries: 0,
-        timeout: 10000,
+        timeout: 8000,
       })
       await client.chat.completions.create({
         model: 'grok-4-fast-non-reasoning',

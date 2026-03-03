@@ -210,7 +210,7 @@ export async function POST(req: Request) {
         apiKey: keyMap[provider],
         maxTokens: settings?.maxTokens ?? 4096,
         temperature: settings?.temperature ?? 0.7,
-        timeoutMs: 30000,
+        timeoutMs: 8000,
       }
 
       const result = await connector.send(messages, cfg)
