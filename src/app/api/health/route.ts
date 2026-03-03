@@ -22,12 +22,12 @@ export async function GET() {
     checks.database = { status: 'error', message: err.message }
   }
 
-  // Rooms カウント
+  // Projects カウント
   try {
-    const count = await prisma.room.count()
-    checks.rooms = { count }
+    const count = await prisma.evalProject.count()
+    checks.projects = { count }
   } catch (err: any) {
-    checks.rooms = { status: 'error', message: err.message }
+    checks.projects = { status: 'error', message: err.message }
   }
 
   return NextResponse.json(checks)

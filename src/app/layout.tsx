@@ -6,8 +6,8 @@ import { Providers } from '@/components/common/Providers'
 const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
-  title: 'Platon AI',
-  description: '複数AIの思考を統合するエンジン',
+  title: 'Platon AI Eval',
+  description: 'AIモデル評価プラットフォーム',
 }
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

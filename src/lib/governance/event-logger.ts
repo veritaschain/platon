@@ -10,6 +10,10 @@ export type EventType =
   | 'pii_mask'
   | 'provider_block'
   | 'image_attachment'
+  | 'eval_run_event'
+  | 'model_response_event'
+  | 'judge_event'
+  | 'project_event'
 
 function hashContent(content: string): string {
   return crypto.createHash('sha256').update(content).digest('hex')

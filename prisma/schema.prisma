@@ -8,6 +8,10 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+// ============================================================
+// Shared Enums
+// ============================================================
+
 enum Provider {
   OPENAI
   ANTHROPIC
@@ -15,102 +19,46 @@ enum Provider {
   XAI
 }
 
-enum ModelRunStatus {
-  PENDING
+enum ProjectStatus {
+  DRAFT
   RUNNING
   COMPLETED
   FAILED
+}
+
+enum PromptSource {
+  GENERATED
+  IMPORTED
+}
+
+enum PromptCategory {
+  ACCURACY
+  RELEVANCE
+  CONCISENESS
+  TONE
+  INSTRUCTION
+  EDGE_CASE
+  GENERAL
+}
+
+enum EvalRunStatus {
+  PENDING
+  RUNNING
+  SCORING
+  COMPLETED
+  FAILED
+}
+
+enum ResponseStatus {
+  COMPLETED
+  FAILED
   TIMEOUT
+  REFUSED
 }
 
-enum TemplateType {
-  VERIFY
-  DEBATE
-  INTEGRATE
-}
-
-model Room {
-  id           String         @id @default(cuid())
-  userId       String
-  title        String
-  isArchived   Boolean        @default(false)
-  createdAt    DateTime       @default(now())
-  updatedAt    DateTime       @updatedAt
-  userMessages UserMessage[]
-  handoffs     Handoff[]
-}
-
-model UserMessage {
-  id              String      @id @default(cuid())
-  roomId          String
-  content         String
-  targetModels    String[]
-  mode            String?
-  orderIndex      Int
-  createdAt       DateTime    @default(now())
-  room            Room        @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  modelRuns       ModelRun[]
-  integrateResults IntegrateResult[]
-}
-
-model ModelRun {
-  id               String         @id @default(cuid())
-  userMessageId    String
-  provider         Provider
-  model            String
-  status           ModelRunStatus @default(PENDING)
-  inputTokens      Int?
-  outputTokens     Int?
-  estimatedCostUsd Decimal?       @db.Decimal(10, 8)
-  latencyMs        Int?
-  piiMasked        Boolean        @default(false)
-  settings         Json?
-  createdAt        DateTime       @default(now())
-  userMessage      UserMessage    @relation(fields: [userMessageId], references: [id], onDelete: Cascade)
-  assistantMessage AssistantMessage?
-  sourceHandoffs   Handoff[]      @relation("SourceHandoffs")
-  targetHandoffs   Handoff[]      @relation("TargetHandoffs")
-  usageLogs        UsageLog[]
-}
-
-model AssistantMessage {
-  id          String   @id @default(cuid())
-  modelRunId  String   @unique
-  content     String
-  createdAt   DateTime @default(now())
-  modelRun    ModelRun @relation(fields: [modelRunId], references: [id], onDelete: Cascade)
-}
-
-model Handoff {
-  id               String          @id @default(cuid())
-  roomId           String
-  sourceModelRunId String
-  targetModelRunId String?
-  templateId       String
-  templateType     TemplateType
-  composedPrompt   String
-  userOverride     String?
-  createdAt        DateTime        @default(now())
-  room             Room            @relation(fields: [roomId], references: [id], onDelete: Cascade)
-  sourceModelRun   ModelRun        @relation("SourceHandoffs", fields: [sourceModelRunId], references: [id])
-  targetModelRun   ModelRun?       @relation("TargetHandoffs", fields: [targetModelRunId], references: [id])
-  integrateResult  IntegrateResult?
-}
-
-model IntegrateResult {
-  id                  String      @id @default(cuid())
-  handoffId           String?     @unique
-  userMessageId       String
-  step1Extractions    Json
-  step15TrustStructure Json
-  step15Conflicts     Json
-  step2Prompt         String
-  step2Output         String
-  fallbackUsed        Boolean     @default(false)
-  createdAt           DateTime    @default(now())
-  handoff             Handoff?    @relation(fields: [handoffId], references: [id])
-  userMessage         UserMessage @relation(fields: [userMessageId], references: [id])
-}
+// ============================================================
+// Shared Infrastructure (Auth, Usage, Events)
+// ============================================================
 
 model UserApiKey {
   id           String   @id @default(cuid())
@@ -126,16 +74,16 @@ model UserApiKey {
 }
 
 model UsageLog {
-  id               String   @id @default(cuid())
+  id               String         @id @default(cuid())
   userId           String
-  modelRunId       String
+  modelResponseId  String?
   provider         Provider
   model            String
   inputTokens      Int
   outputTokens     Int
-  estimatedCostUsd Decimal  @db.Decimal(10, 8)
-  createdAt        DateTime @default(now())
-  modelRun         ModelRun @relation(fields: [modelRunId], references: [id])
+  estimatedCostUsd Decimal        @db.Decimal(10, 8)
+  createdAt        DateTime       @default(now())
+  modelResponse    ModelResponse? @relation("ModelResponseUsageLogs", fields: [modelResponseId], references: [id])
 }
 
 model EventLog {
@@ -150,13 +98,117 @@ model EventLog {
   @@index([sessionId])
 }
 
-model HandoffTemplate {
-  id          String       @id @default(cuid())
-  type        TemplateType
-  name        String
-  description String
-  promptTpl   String
-  isDefault   Boolean      @default(false)
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
+// ============================================================
+// Eval Platform Models
+// ============================================================
+
+model EvalProject {
+  id             String        @id @default(cuid())
+  userId         String
+  name           String
+  useCaseProfile Json?
+  status         ProjectStatus @default(DRAFT)
+  isArchived     Boolean       @default(false)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  promptSets     PromptSet[]
+  evalRuns       EvalRun[]
+
+  @@index([userId, isArchived])
+}
+
+model PromptSet {
+  id               String       @id @default(cuid())
+  projectId        String
+  source           PromptSource
+  generationConfig Json?
+  createdAt        DateTime     @default(now())
+  project          EvalProject  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  promptItems      PromptItem[]
+  evalRuns         EvalRun[]
+
+  @@index([projectId])
+}
+
+model PromptItem {
+  id               String          @id @default(cuid())
+  promptSetId      String
+  category         PromptCategory
+  prompt           String
+  evaluationFocus  String
+  goldStandardHint String?
+  orderIndex       Int
+  createdAt        DateTime        @default(now())
+  promptSet        PromptSet       @relation(fields: [promptSetId], references: [id], onDelete: Cascade)
+  modelResponses   ModelResponse[]
+
+  @@index([promptSetId])
+}
+
+model EvalRun {
+  id               String          @id @default(cuid())
+  projectId        String
+  promptSetId      String
+  targetModels     String[]
+  judgeModel       String
+  status           EvalRunStatus   @default(PENDING)
+  estimatedCostUsd Decimal?        @db.Decimal(10, 8)
+  actualCostUsd    Decimal?        @db.Decimal(10, 8)
+  createdAt        DateTime        @default(now())
+  completedAt      DateTime?
+  project          EvalProject     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  promptSet        PromptSet       @relation(fields: [promptSetId], references: [id])
+  modelResponses   ModelResponse[]
+  evalReport       EvalReport?
+
+  @@index([projectId])
+}
+
+model ModelResponse {
+  id               String         @id @default(cuid())
+  evalRunId        String
+  promptItemId     String
+  provider         Provider
+  model            String
+  content          String
+  inputTokens      Int?
+  outputTokens     Int?
+  estimatedCostUsd Decimal?       @db.Decimal(10, 8)
+  latencyMs        Int?
+  status           ResponseStatus @default(COMPLETED)
+  piiMasked        Boolean        @default(false)
+  createdAt        DateTime       @default(now())
+  evalRun          EvalRun        @relation(fields: [evalRunId], references: [id], onDelete: Cascade)
+  promptItem       PromptItem     @relation(fields: [promptItemId], references: [id])
+  judgeScore       JudgeScore?
+  usageLogs        UsageLog[]     @relation("ModelResponseUsageLogs")
+
+  @@index([evalRunId])
+  @@index([promptItemId])
+}
+
+model JudgeScore {
+  id                   String        @id @default(cuid())
+  modelResponseId      String        @unique
+  judgeModel           String
+  accuracy             Int
+  relevance            Int
+  conciseness          Int
+  tone                 Int
+  instructionFollowing Int
+  reasons              Json
+  createdAt            DateTime      @default(now())
+  modelResponse        ModelResponse @relation(fields: [modelResponseId], references: [id], onDelete: Cascade)
+}
+
+model EvalReport {
+  id             String   @id @default(cuid())
+  evalRunId      String   @unique
+  rankings       Json
+  scoreMatrix    Json
+  highlights     Json
+  costProjection Json
+  recommendation String
+  createdAt      DateTime @default(now())
+  evalRun        EvalRun  @relation(fields: [evalRunId], references: [id], onDelete: Cascade)
 }
