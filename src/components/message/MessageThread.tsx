@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, useMemo } from 'react'
 import { useMessageStore, type ModelRun } from '@/stores/message-store'
 import { ResponseCard } from './ResponseCard'
 import { HandoffComment } from './HandoffComment'
+import { ComparisonChart } from './ComparisonChart'
 import { IntegrateCard } from '@/components/integrate/IntegrateCard'
 import { HandoffDialog } from '@/components/handoff/HandoffDialog'
 import { Button } from '@/components/common/Button'
@@ -217,6 +218,9 @@ export function MessageThread({ roomId, messages }: MessageThreadProps) {
                 </div>
               ))}
             </div>
+
+            {/* Comparison chart */}
+            <ComparisonChart runs={originals} />
 
             {/* Integrate button / result */}
             {originals.filter(r => r.status === 'COMPLETED').length >= 2 && !msg.integrateResult && (
