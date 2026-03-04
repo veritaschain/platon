@@ -56,7 +56,15 @@ export const usePromptSetStore = create<PromptSetStore>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ answers }),
       })
-      const data = await res.json()
+
+      let data: any
+      try {
+        data = await res.json()
+      } catch {
+        set({ isGenerating: false })
+        throw new Error(`サーバーエラー (${res.status}): 応答が空です。時間をおいて再度お試しください。`)
+      }
+
       if (res.ok) {
         set({ promptSet: data, isGenerating: false })
       } else {
