@@ -27,7 +27,9 @@ interface EvalStore {
   setProgress: (event: EvalProgressEvent | null) => void
 }
 
-const BATCH_SIZE = 5
+// Execute 1 prompt per request to fit Amplify's ~10s Lambda timeout
+const EXECUTE_BATCH_SIZE = 1
+const JUDGE_BATCH_SIZE = 2
 
 export const useEvalStore = create<EvalStore>((set, get) => ({
   evalRuns: [],
@@ -70,7 +72,7 @@ export const useEvalStore = create<EvalStore>((set, get) => ({
   runEvaluation: async (projectId: string, runId: string) => {
     const stepUrl = `/api/projects/${projectId}/eval-runs/${runId}/step`
 
-    const callStep = async (body: object, maxRetries = 2): Promise<any> => {
+    const callStep = async (body: object, maxRetries = 3): Promise<any> => {
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
         const res = await fetch(stepUrl, {
           method: 'POST',
@@ -81,15 +83,16 @@ export const useEvalStore = create<EvalStore>((set, get) => ({
         try {
           data = await res.json()
         } catch {
+          // Empty response (504 timeout) — Lambda cold start, retry
           if (attempt < maxRetries) {
-            await new Promise(r => setTimeout(r, 1000))
+            await new Promise(r => setTimeout(r, 2000))
             continue
           }
           throw new Error(`サーバータイムアウト (${res.status})`)
         }
         if (!res.ok) {
           if (res.status >= 500 && attempt < maxRetries) {
-            await new Promise(r => setTimeout(r, 1000))
+            await new Promise(r => setTimeout(r, 2000))
             continue
           }
           throw new Error(data.error || 'ステップ実行に失敗しました')
@@ -114,8 +117,8 @@ export const useEvalStore = create<EvalStore>((set, get) => ({
       for (const model of targetModels) {
         const promptIds = promptItems.map(p => p.id)
 
-        for (let offset = 0; offset < promptIds.length; offset += BATCH_SIZE) {
-          const batchIds = promptIds.slice(offset, offset + BATCH_SIZE)
+        for (let offset = 0; offset < promptIds.length; offset += EXECUTE_BATCH_SIZE) {
+          const batchIds = promptIds.slice(offset, offset + EXECUTE_BATCH_SIZE)
 
           set({
             progress: {
@@ -150,7 +153,7 @@ export const useEvalStore = create<EvalStore>((set, get) => ({
           },
         })
 
-        const judgeResult = await callStep({ step: 'judge', limit: 5 }) as { judged: number; remaining: number }
+        const judgeResult = await callStep({ step: 'judge', limit: JUDGE_BATCH_SIZE }) as { judged: number; remaining: number }
         remaining = judgeResult.remaining
         if (judgeResult.judged === 0) break // No more to judge
       }

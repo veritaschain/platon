@@ -12,8 +12,9 @@ import { getDefaultWeights, computeWeightedRanking, buildScoreMatrix } from '@/l
 import { selectHighlights, buildCostProjection, generateRecommendation } from '@/lib/eval/report-generator'
 import type { UseCaseProfile } from '@/lib/eval/types'
 
-const TIMEOUT_MS = 30000
-const MAX_TOKENS = 4096
+// Amplify Lambda has ~10s hard timeout — keep each request under 9s
+const TIMEOUT_MS = 8000
+const MAX_TOKENS = 1024
 
 export async function POST(
   req: Request,
@@ -31,6 +32,7 @@ export async function POST(
 
     const body = await req.json()
     const { step } = body
+    console.log(`[eval-step] step=${step}, runId=${params.runId}`)
 
     // ============================================================
     // Step: init — Return prompt items and set status to RUNNING
@@ -194,9 +196,9 @@ export async function POST(
         provider: judgeInfo.provider as Provider,
         model: run.judgeModel,
         apiKey: judgeApiKey,
-        maxTokens: 1024,
+        maxTokens: 512,
         temperature: 0,
-        timeoutMs: 30000,
+        timeoutMs: 8000,
       }
 
       const useCaseDesc = useCaseProfile
