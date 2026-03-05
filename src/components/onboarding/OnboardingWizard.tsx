@@ -61,7 +61,7 @@ export function OnboardingWizard({ projectId, onComplete, onImport }: Onboarding
   const [currentStep, setCurrentStep] = useState(0)
   const [answers, setAnswers] = useState<Record<string, string | string[]>>({})
   const [error, setError] = useState<string | null>(null)
-  const { isGenerating, generatePromptSet, importPromptSet } = usePromptSetStore()
+  const { isGenerating, generationStep, generatePromptSet, importPromptSet } = usePromptSetStore()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const currentQ = QUESTIONS[currentStep]
@@ -175,7 +175,7 @@ export function OnboardingWizard({ projectId, onComplete, onImport }: Onboarding
           {isGenerating ? (
             <span className="flex items-center gap-2">
               <span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
-              生成中...
+              {generationStep || '生成中...'}
             </span>
           ) : isLastStep ? (
             'プロンプトを生成'

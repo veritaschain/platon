@@ -20,6 +20,7 @@ interface PromptSetStore {
   promptSet: PromptSet | null
   isLoading: boolean
   isGenerating: boolean
+  generationStep: string
   fetchPromptSet: (projectId: string) => Promise<void>
   generatePromptSet: (projectId: string, answers: Record<string, any>) => Promise<void>
   importPromptSet: (projectId: string, file: File) => Promise<void>
@@ -32,6 +33,7 @@ export const usePromptSetStore = create<PromptSetStore>((set, get) => ({
   promptSet: null,
   isLoading: false,
   isGenerating: false,
+  generationStep: '',
 
   fetchPromptSet: async (projectId: string) => {
     set({ isLoading: true })
@@ -49,30 +51,51 @@ export const usePromptSetStore = create<PromptSetStore>((set, get) => ({
   },
 
   generatePromptSet: async (projectId: string, answers: Record<string, any>) => {
-    set({ isGenerating: true })
+    set({ isGenerating: true, generationStep: 'プロファイル分析中...' })
     try {
-      const res = await fetch(`/api/projects/${projectId}/prompt-set/generate`, {
+      // Step 1: Generate profile + distribution (~6s)
+      const res1 = await fetch(`/api/projects/${projectId}/prompt-set/generate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answers }),
+        body: JSON.stringify({ step: 'profile', answers }),
       })
 
-      let data: any
+      let step1Data: any
       try {
-        data = await res.json()
+        step1Data = await res1.json()
       } catch {
-        set({ isGenerating: false })
-        throw new Error(`サーバーエラー (${res.status}): 応答が空です。時間をおいて再度お試しください。`)
+        throw new Error(`サーバーエラー (${res1.status}): プロファイル生成の応答が空です。`)
+      }
+      if (!res1.ok) {
+        throw new Error(step1Data.error || 'プロファイル生成に失敗しました')
       }
 
-      if (res.ok) {
-        set({ promptSet: data, isGenerating: false })
-      } else {
-        set({ isGenerating: false })
-        throw new Error(data.error || 'プロンプト生成に失敗しました')
+      // Step 2: Generate prompt set (~20-25s)
+      set({ generationStep: 'プロンプト生成中...' })
+      const res2 = await fetch(`/api/projects/${projectId}/prompt-set/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          step: 'prompts',
+          profile: step1Data.profile,
+          distribution: step1Data.distribution,
+          answers,
+        }),
+      })
+
+      let step2Data: any
+      try {
+        step2Data = await res2.json()
+      } catch {
+        throw new Error(`サーバーエラー (${res2.status}): プロンプト生成の応答が空です。Amplifyのタイムアウトを60秒以上に設定してください。`)
       }
+      if (!res2.ok) {
+        throw new Error(step2Data.error || 'プロンプト生成に失敗しました')
+      }
+
+      set({ promptSet: step2Data, isGenerating: false, generationStep: '' })
     } catch (e) {
-      set({ isGenerating: false })
+      set({ isGenerating: false, generationStep: '' })
       throw e
     }
   },
