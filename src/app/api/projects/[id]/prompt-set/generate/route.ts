@@ -23,6 +23,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     const body = await req.json()
     const { step } = body as { step?: string }
+    console.log('[generate] Received step:', JSON.stringify(step), 'keys:', Object.keys(body))
 
     // ============================================================
     // Step 1: Profile + Distribution (ルールベース、即座に完了)
@@ -106,7 +107,51 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       return NextResponse.json(promptSet)
     }
 
-    return NextResponse.json({ error: '不正なstepパラメータ' }, { status: 400 })
+    // ============================================================
+    // Backward compat: old frontend sends step='prompts' (全バッチ並列実行)
+    // ============================================================
+    if (step === 'prompts') {
+      const { profile: rawProfile, distribution: rawDist, answers } = body as {
+        profile: UseCaseProfile
+        distribution: Record<string, number>
+        answers: HearingAnswers
+      }
+
+      // profile might come from old LLM-based step or new rule-based step
+      const profile = rawProfile || generateUseCaseProfile(answers)
+      const distribution = rawDist || computeCategoryDistribution(profile.priority)
+      const batches = splitIntoBatches(distribution as any)
+
+      console.log('[generate] Compat mode: generating all batches in parallel...')
+      const batchResults = await Promise.all(
+        batches.map((cats, i) => generatePromptBatch(profile, cats, user.id, i))
+      )
+      const allPrompts = batchResults.flat()
+      console.log('[generate] Compat mode complete:', allPrompts.length, 'prompts')
+
+      await prisma.promptSet.deleteMany({ where: { projectId: params.id } })
+      const promptSet = await prisma.promptSet.create({
+        data: {
+          projectId: params.id,
+          source: 'GENERATED',
+          generationConfig: { answers, profile, distribution } as any,
+          promptItems: {
+            create: allPrompts.map((p, index) => ({
+              category: (p.category.toUpperCase() as any) || 'GENERAL',
+              prompt: p.prompt,
+              evaluationFocus: p.evaluation_focus || '',
+              goldStandardHint: p.gold_standard_hint || null,
+              orderIndex: index,
+            })),
+          },
+        },
+        include: { promptItems: { orderBy: { orderIndex: 'asc' } } },
+      })
+
+      return NextResponse.json(promptSet)
+    }
+
+    return NextResponse.json({ error: `不正なstepパラメータ: ${step}` }, { status: 400 })
   } catch (error) {
     console.error('Prompt generation error:', error)
     return NextResponse.json(
