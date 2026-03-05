@@ -1,5 +1,8 @@
 import { prisma } from '@/lib/db/client'
 import { createClient } from '@/lib/supabase/server'
+import { runFullEvaluation } from '@/lib/eval/orchestrator'
+
+export const maxDuration = 300
 
 export async function GET(
   _: Request,
@@ -18,71 +21,55 @@ export async function GET(
     return new Response('Not found', { status: 404 })
   }
 
-  // SSE stream
+  const evalRun = await prisma.evalRun.findUnique({
+    where: { id: params.runId },
+  })
+  if (!evalRun) {
+    return new Response('Run not found', { status: 404 })
+  }
+
   const encoder = new TextEncoder()
   const stream = new ReadableStream({
     async start(controller) {
       const send = (data: object) => {
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
-      }
-
-      let lastCount = 0
-
-      const poll = async () => {
         try {
-          const run = await prisma.evalRun.findUnique({
-            where: { id: params.runId },
-            include: {
-              _count: { select: { modelResponses: true } },
-              promptSet: { include: { _count: { select: { promptItems: true } } } },
-            },
-          })
-
-          if (!run) {
-            send({ type: 'error', message: '評価ランが見つかりません' })
-            controller.close()
-            return
-          }
-
-          const totalPrompts = run.promptSet._count.promptItems
-          const totalModels = run.targetModels.length
-          const totalCount = totalPrompts * totalModels
-          const completedCount = run._count.modelResponses
-
-          if (completedCount !== lastCount) {
-            lastCount = completedCount
-            send({
-              type: run.status === 'SCORING' ? 'scoring_start' : 'response_complete',
-              completedCount,
-              totalCount,
-              totalPrompts,
-              totalModels,
-              message: run.status === 'SCORING'
-                ? '品質採点中...'
-                : `${completedCount}/${totalCount} 完了`,
-            })
-          }
-
-          if (run.status === 'COMPLETED') {
-            send({ type: 'complete', message: '評価が完了しました' })
-            controller.close()
-            return
-          }
-
-          if (run.status === 'FAILED') {
-            send({ type: 'error', message: '評価中にエラーが発生しました' })
-            controller.close()
-            return
-          }
-
-          // Continue polling
-          setTimeout(poll, 1000)
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`))
         } catch {
-          controller.close()
+          // Controller already closed
         }
       }
 
-      poll()
+      // If run is already completed or failed, send final status and close
+      if (evalRun.status === 'COMPLETED') {
+        send({ type: 'complete', message: '評価が完了しました' })
+        controller.close()
+        return
+      }
+      if (evalRun.status === 'FAILED') {
+        send({ type: 'error', message: '評価中にエラーが発生しました' })
+        controller.close()
+        return
+      }
+
+      // Run is PENDING or RUNNING — execute evaluation within this SSE stream
+      // This keeps the Lambda alive while streaming progress back to the client
+      try {
+        console.log('[progress] Starting evaluation within SSE stream for run:', params.runId)
+
+        await runFullEvaluation(evalRun.id, user.id, (event) => {
+          send(event)
+        })
+
+        send({ type: 'complete', message: '評価が完了しました' })
+      } catch (error) {
+        console.error('[progress] Evaluation error:', error)
+        send({
+          type: 'error',
+          message: error instanceof Error ? error.message : '評価中にエラーが発生しました',
+        })
+      }
+
+      controller.close()
     },
   })
 

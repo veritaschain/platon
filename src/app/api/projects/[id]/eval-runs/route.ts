@@ -71,7 +71,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     )
   }
 
-  // Create eval run
+  // Create eval run (execution is triggered by SSE /progress endpoint)
   const evalRun = await prisma.evalRun.create({
     data: {
       projectId: params.id,
@@ -80,11 +80,6 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       judgeModel,
       estimatedCostUsd: estimatedCost,
     },
-  })
-
-  // Start evaluation asynchronously (fire-and-forget)
-  runFullEvaluation(evalRun.id, user.id).catch(err => {
-    console.error('Eval run failed:', err)
   })
 
   return NextResponse.json({ runId: evalRun.id, estimatedCost })
