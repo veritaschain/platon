@@ -88,26 +88,49 @@ export const usePromptSetStore = create<PromptSetStore>((set, get) => ({
     }
 
     try {
-      // Step 1: Generate profile + distribution
+      // Step 1: Generate profile + distribution (ルールベース、即座に完了)
       set({ generationStep: 'プロファイル分析中...' })
       const step1Data = await fetchWithRetry(
         `/api/projects/${projectId}/prompt-set/generate`,
         { step: 'profile', answers }
       )
 
-      // Step 2: Generate prompt set
-      set({ generationStep: 'プロンプト生成中...' })
-      const step2Data = await fetchWithRetry(
+      const { profile, distribution, batches } = step1Data as {
+        profile: any
+        distribution: any
+        batches: { category: string; count: number }[][]
+      }
+
+      // Step 2: Generate prompts in batches (~5-8s each)
+      const allPrompts: any[] = []
+      for (let i = 0; i < batches.length; i++) {
+        set({ generationStep: `プロンプト生成中... (${i + 1}/${batches.length})` })
+        const batchResult = await fetchWithRetry(
+          `/api/projects/${projectId}/prompt-set/generate`,
+          {
+            step: 'batch',
+            profile,
+            batchCategories: batches[i],
+            batchIndex: i,
+          }
+        )
+        allPrompts.push(...(batchResult.prompts || []))
+      }
+
+      // Step 3: Save all prompts to DB
+      set({ generationStep: '保存中...' })
+      const saved = await fetchWithRetry(
         `/api/projects/${projectId}/prompt-set/generate`,
         {
-          step: 'prompts',
-          profile: step1Data.profile,
-          distribution: step1Data.distribution,
+          step: 'save',
           answers,
+          profile,
+          distribution,
+          allPrompts,
         }
       )
 
-      set({ promptSet: step2Data, isGenerating: false, generationStep: '' })
+      set({ promptSet: saved, isGenerating: false, generationStep: '' })
     } catch (e) {
       set({ isGenerating: false, generationStep: '' })
       throw e

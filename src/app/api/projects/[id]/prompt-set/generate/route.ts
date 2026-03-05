@@ -4,12 +4,11 @@ import { createClient } from '@/lib/supabase/server'
 import {
   generateUseCaseProfile,
   computeCategoryDistribution,
-  generatePromptSet,
+  generatePromptBatch,
+  splitIntoBatches,
 } from '@/lib/eval/prompt-generator'
-import type { HearingAnswers, UseCaseProfile, CategoryDistribution } from '@/lib/eval/types'
-
-// Allow up to 120s for LLM calls
-export const maxDuration = 120
+import type { PromptCategory } from '@prisma/client'
+import type { HearingAnswers, UseCaseProfile, GeneratedPrompt } from '@/lib/eval/types'
 
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {
@@ -26,13 +25,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     const { step } = body as { step?: string }
 
     // ============================================================
-    // Step 1: Hearing answers → UseCaseProfile + Distribution (~6s)
+    // Step 1: Profile + Distribution (ルールベース、即座に完了)
     // ============================================================
     if (!step || step === 'profile') {
       const { answers } = body as { answers: HearingAnswers }
 
-      console.log('[generate] Stage 1: generating use case profile...')
-      const profile = await generateUseCaseProfile(answers, user.id)
+      console.log('[generate] Stage 1: generating use case profile (rule-based)...')
+      const profile = generateUseCaseProfile(answers)
       console.log('[generate] Stage 1 complete:', profile.domain)
 
       await prisma.evalProject.update({
@@ -41,23 +40,46 @@ export async function POST(req: Request, { params }: { params: { id: string } })
       })
 
       const distribution = computeCategoryDistribution(profile.priority)
+      const batches = splitIntoBatches(distribution)
 
-      return NextResponse.json({ step: 'profile_done', profile, distribution })
+      return NextResponse.json({
+        step: 'profile_done',
+        profile,
+        distribution,
+        batches,
+        totalBatches: batches.length,
+      })
     }
 
     // ============================================================
-    // Step 2: Profile + Distribution → Prompt Set (~20-25s)
+    // Step 2: Generate one batch of prompts (LLM 1回, ~5-8s)
     // ============================================================
-    if (step === 'prompts') {
-      const { profile, distribution, answers } = body as {
+    if (step === 'batch') {
+      const { profile, batchCategories, batchIndex } = body as {
         profile: UseCaseProfile
-        distribution: CategoryDistribution
-        answers: HearingAnswers
+        batchCategories: { category: PromptCategory; count: number }[]
+        batchIndex: number
       }
 
-      console.log('[generate] Stage 3: generating prompts...')
-      const generatedPrompts = await generatePromptSet(profile, distribution, user.id)
-      console.log('[generate] Stage 3 complete:', generatedPrompts.length, 'prompts')
+      console.log(`[generate] Batch ${batchIndex}: generating prompts...`, batchCategories)
+      const prompts = await generatePromptBatch(profile, batchCategories, user.id, batchIndex)
+      console.log(`[generate] Batch ${batchIndex} complete:`, prompts.length, 'prompts')
+
+      return NextResponse.json({ prompts, batchIndex })
+    }
+
+    // ============================================================
+    // Step 3: Save all generated prompts to DB
+    // ============================================================
+    if (step === 'save') {
+      const { answers, profile, distribution, allPrompts } = body as {
+        answers: HearingAnswers
+        profile: UseCaseProfile
+        distribution: Record<string, number>
+        allPrompts: GeneratedPrompt[]
+      }
+
+      console.log('[generate] Saving', allPrompts.length, 'prompts to DB...')
 
       // Delete existing prompt sets for this project
       await prisma.promptSet.deleteMany({ where: { projectId: params.id } })
@@ -69,7 +91,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
           source: 'GENERATED',
           generationConfig: { answers, profile, distribution } as any,
           promptItems: {
-            create: generatedPrompts.map((p, index) => ({
+            create: allPrompts.map((p, index) => ({
               category: (p.category.toUpperCase() as any) || 'GENERAL',
               prompt: p.prompt,
               evaluationFocus: p.evaluation_focus || '',

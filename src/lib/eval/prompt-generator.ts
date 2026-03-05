@@ -31,68 +31,37 @@ async function selectCheapModel(
 }
 
 // ============================================================
-// Stage 1: Hearing → UseCaseProfile (LLM 1回)
+// Stage 1: Hearing → UseCaseProfile (ルールベース、LLM不使用)
 // ============================================================
 
-export async function generateUseCaseProfile(
+const PRIORITY_MAP: Record<string, string> = {
+  '正確さ重視': 'accuracy',
+  'スピード重視': 'speed',
+  '丁寧さ重視': 'tone',
+  '創造性重視': 'creativity',
+  '簡潔さ重視': 'conciseness',
+}
+
+export function generateUseCaseProfile(
   answers: HearingAnswers,
-  userId: string
-): Promise<UseCaseProfile> {
-  const selected = await selectCheapModel(userId)
-  if (!selected) throw new Error('利用可能なAPIキーがありません')
+): UseCaseProfile {
+  const domain = [answers.q4_domain, answers.q1_useCase].filter(Boolean).join(' / ') || '一般'
+  const priorities = (answers.q3_priorities || []).map(p => PRIORITY_MAP[p] || p)
+  const constraints = answers.q5_constraints
+    ? answers.q5_constraints.split(/[、,\n]/).map(s => s.trim()).filter(Boolean)
+    : []
 
-  const connector = getConnector(selected.provider)
-  const config: ConnectorConfig = {
-    provider: selected.provider,
-    model: selected.model,
-    apiKey: selected.apiKey,
-    maxTokens: 1024,
-    temperature: 0.1,
-    timeoutMs: 30000,
+  return {
+    domain,
+    audience: answers.q2_audience || '一般ユーザー',
+    priority: priorities.length > 0 ? priorities : ['accuracy'],
+    constraints,
+    risk_factors: constraints.length > 0
+      ? [`制約違反: ${constraints[0]}`]
+      : ['不正確な情報提供'],
+    output_format: '自然文',
+    language: '日本語',
   }
-
-  const messages: ConnectorMessage[] = [
-    {
-      role: 'system',
-      content: `あなたはAIモデル評価プラットフォームのアシスタントです。
-ユーザーのヒアリング回答から、構造化されたユースケースプロファイルをJSON形式で出力してください。
-必ず以下の形式のJSONのみを出力してください。他のテキストは不要です。`,
-    },
-    {
-      role: 'user',
-      content: `以下のヒアリング回答からユースケースプロファイルを生成してください。
-
-Q1. AIの用途: ${answers.q1_useCase}
-Q2. 対象ユーザー: ${answers.q2_audience}
-Q3. 重視する性格: ${answers.q3_priorities.join(', ')}
-Q4. 業界・ドメイン: ${answers.q4_domain}
-Q5. 外せないポイント/NG: ${answers.q5_constraints}
-
-出力形式:
-{
-  "domain": "業界/用途の短い説明",
-  "audience": "対象ユーザーの説明",
-  "priority": ["accuracy", "tone" 等、重視する評価軸の英語名配列],
-  "constraints": ["制約条件の配列"],
-  "risk_factors": ["リスク要因の配列"],
-  "output_format": "期待する出力形式",
-  "language": "主要言語"
-}`,
-    },
-  ]
-
-  const response = await connector.send(messages, config)
-  const profile = parseJsonResponse<UseCaseProfile>(response.content)
-
-  if (!profile) {
-    // Retry once
-    const retryResponse = await connector.send(messages, config)
-    const retryProfile = parseJsonResponse<UseCaseProfile>(retryResponse.content)
-    if (!retryProfile) throw new Error('ユースケースプロファイルの生成に失敗しました')
-    return retryProfile
-  }
-
-  return profile
 }
 
 // ============================================================
@@ -166,10 +135,12 @@ export function computeCategoryDistribution(
 // Stage 3: Prompt Generation (LLM 1回)
 // ============================================================
 
-export async function generatePromptSet(
+// Generate a batch of prompts for specific categories (5 prompts max per call)
+export async function generatePromptBatch(
   profile: UseCaseProfile,
-  distribution: CategoryDistribution,
-  userId: string
+  categories: { category: PromptCategory; count: number }[],
+  userId: string,
+  batchIndex: number,
 ): Promise<GeneratedPrompt[]> {
   const selected = await selectCheapModel(userId)
   if (!selected) throw new Error('利用可能なAPIキーがありません')
@@ -179,58 +150,35 @@ export async function generatePromptSet(
     provider: selected.provider,
     model: selected.model,
     apiKey: selected.apiKey,
-    maxTokens: 4096,
+    maxTokens: 2048,
     temperature: 0.7,
-    timeoutMs: 60000,
+    timeoutMs: 25000,
   }
 
+  const totalInBatch = categories.reduce((s, c) => s + c.count, 0)
   const seeds = getSeedPrompts(profile.domain)
-  const seedText = seeds
+  const seedText = seeds.slice(0, 2)
     .map((s, i) => `  ${i + 1}. [${s.category}] ${s.prompt}`)
     .join('\n')
 
-  const distText = (Object.entries(distribution) as [PromptCategory, number][])
-    .filter(([, count]) => count > 0)
-    .map(([cat, count]) => `  - ${cat}: ${count}問`)
-    .join('\n')
+  const catText = categories
+    .map(c => `${c.category}: ${c.count}問`)
+    .join(', ')
 
   const messages: ConnectorMessage[] = [
     {
-      role: 'system',
-      content: `あなたはAI評価用プロンプトの専門家です。
-ユースケースプロファイルとカテゴリ配分に基づき、評価用プロンプトセットをJSON配列で生成してください。
-JSONの配列のみを出力してください。他のテキストは不要です。`,
-    },
-    {
       role: 'user',
-      content: `以下のユースケースに対する評価用プロンプトを合計20問生成してください。
+      content: `AI評価用プロンプトを${totalInBatch}問、JSON配列で生成してください。JSONのみ出力。
 
-## ユースケースプロファイル
-${JSON.stringify(profile, null, 2)}
+ドメイン: ${profile.domain} / 対象: ${profile.audience}
+制約: ${profile.constraints.join(', ') || 'なし'}
+カテゴリ配分: ${catText}
 
-## カテゴリ別配分
-${distText}
+参考: ${seedText}
 
-## 参考シードプロンプト（これらを参考にしつつ、残りを独自に生成）
-${seedText}
+[{"id":"p${String(batchIndex * 5 + 1).padStart(2, '0')}","category":"ACCURACY","prompt":"質問文","evaluation_focus":"評価ポイント","gold_standard_hint":"理想回答の方向性"}]
 
-## 出力形式（JSON配列）
-[
-  {
-    "id": "p01",
-    "category": "ACCURACY",
-    "prompt": "実際のプロンプト文",
-    "evaluation_focus": "何を評価するかの1文説明",
-    "gold_standard_hint": "理想的な回答の方向性（採点の参考用）"
-  }
-]
-
-注意:
-- 各カテゴリの問数を配分通りに合わせてください
-- プロンプトは具体的で、モデルの差が出やすいものにしてください
-- gold_standard_hint はジャッジモデルの参考用（ユーザーには非表示）
-- 日本語で生成してください
-- id は p01, p02, ... のように連番`,
+日本語で、具体的に。`,
     },
   ]
 
@@ -238,22 +186,48 @@ ${seedText}
   let prompts = parseJsonResponse<GeneratedPrompt[]>(response.content)
 
   if (!prompts || !Array.isArray(prompts)) {
-    // Retry once
     const retryResponse = await connector.send(messages, config)
     prompts = parseJsonResponse<GeneratedPrompt[]>(retryResponse.content)
     if (!prompts || !Array.isArray(prompts)) {
-      throw new Error('プロンプトセットの生成に失敗しました')
+      throw new Error('プロンプト生成に失敗しました')
     }
   }
 
-  // Quality guardrails
-  prompts = prompts.filter(p => {
-    if (!p.prompt || p.prompt.length < 10) return false
-    if (p.prompt.length > 500) return false
-    return true
-  })
+  return prompts.filter(p => p.prompt && p.prompt.length >= 10 && p.prompt.length <= 500)
+}
 
-  return prompts
+// Split distribution into batches of ~5 prompts each
+export function splitIntoBatches(
+  distribution: CategoryDistribution
+): { category: PromptCategory; count: number }[][] {
+  const entries = (Object.entries(distribution) as [PromptCategory, number][])
+    .filter(([, count]) => count > 0)
+
+  const batches: { category: PromptCategory; count: number }[][] = []
+  let currentBatch: { category: PromptCategory; count: number }[] = []
+  let currentCount = 0
+
+  for (const [category, count] of entries) {
+    if (currentCount + count > 5 && currentBatch.length > 0) {
+      batches.push(currentBatch)
+      currentBatch = []
+      currentCount = 0
+    }
+    currentBatch.push({ category, count })
+    currentCount += count
+
+    if (currentCount >= 5) {
+      batches.push(currentBatch)
+      currentBatch = []
+      currentCount = 0
+    }
+  }
+
+  if (currentBatch.length > 0) {
+    batches.push(currentBatch)
+  }
+
+  return batches
 }
 
 // ============================================================
