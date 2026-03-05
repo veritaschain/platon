@@ -1,7 +1,7 @@
 'use client'
 
 import { useParams, useRouter } from 'next/navigation'
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useEvalStore } from '@/stores/eval-store'
 import { EvalProgress } from '@/components/eval/EvalProgress'
 
@@ -9,18 +9,22 @@ export default function RunPage() {
   const params = useParams()
   const router = useRouter()
   const projectId = params.projectId as string
-  const { evalRuns, activeRunId, progress, isRunning, fetchEvalRuns, subscribeProgress } = useEvalStore()
+  const { evalRuns, activeRunId, progress, isRunning, fetchEvalRuns, runEvaluation } = useEvalStore()
+  const startedRef = useRef(false)
 
   useEffect(() => {
     fetchEvalRuns(projectId)
   }, [projectId])
 
-  // Subscribe to the latest running eval run
+  // Auto-start evaluation for PENDING runs
   useEffect(() => {
-    const latestRun = evalRuns.find(r => r.status === 'RUNNING' || r.status === 'SCORING' || r.status === 'PENDING')
-    if (latestRun) {
-      const cleanup = subscribeProgress(projectId, latestRun.id)
-      return cleanup
+    if (startedRef.current) return
+    const pendingRun = evalRuns.find(r => r.status === 'PENDING')
+    if (pendingRun) {
+      startedRef.current = true
+      runEvaluation(projectId, pendingRun.id).catch(err => {
+        console.error('Evaluation failed:', err)
+      })
     }
   }, [evalRuns])
 

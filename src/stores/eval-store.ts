@@ -23,9 +23,11 @@ interface EvalStore {
     targetModels: string[]
     judgeModel: string
   }) => Promise<string>
-  subscribeProgress: (projectId: string, runId: string) => () => void
+  runEvaluation: (projectId: string, runId: string) => Promise<void>
   setProgress: (event: EvalProgressEvent | null) => void
 }
+
+const BATCH_SIZE = 5
 
 export const useEvalStore = create<EvalStore>((set, get) => ({
   evalRuns: [],
@@ -60,39 +62,118 @@ export const useEvalStore = create<EvalStore>((set, get) => ({
     }
 
     const { runId } = await res.json()
-    set(s => ({ activeRunId: runId }))
+    set({ activeRunId: runId })
     return runId
   },
 
-  subscribeProgress: (projectId: string, runId: string) => {
-    const eventSource = new EventSource(
-      `/api/projects/${projectId}/eval-runs/${runId}/progress`
-    )
+  // Client-side orchestration: calls /step endpoint sequentially
+  runEvaluation: async (projectId: string, runId: string) => {
+    const stepUrl = `/api/projects/${projectId}/eval-runs/${runId}/step`
 
-    eventSource.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data) as EvalProgressEvent
-        set({ progress: data })
-
-        if (data.type === 'complete' || data.type === 'error') {
-          set({ isRunning: false })
-          eventSource.close()
-          // Refresh eval runs
-          get().fetchEvalRuns(projectId)
-        }
-      } catch {
-        // Ignore parse errors
+    const callStep = async (body: object) => {
+      const res = await fetch(stepUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'ステップ実行に失敗しました' }))
+        throw new Error(err.error)
       }
+      return res.json()
     }
 
-    eventSource.onerror = () => {
-      set({ isRunning: false })
-      eventSource.close()
-    }
+    try {
+      // Step 1: Init — get prompt items and target models
+      set({ progress: { type: 'response_complete', message: '初期化中...', completedCount: 0, totalCount: 1 } })
+      const initData = await callStep({ step: 'init' })
+      const { promptItems, targetModels } = initData as {
+        promptItems: { id: string; prompt: string }[]
+        targetModels: string[]
+      }
 
-    // Return cleanup function
-    return () => {
-      eventSource.close()
+      const totalCount = promptItems.length * targetModels.length
+      let completedCount = 0
+
+      // Step 2: Execute — batch by model, then by prompt batch
+      for (const model of targetModels) {
+        const promptIds = promptItems.map(p => p.id)
+
+        for (let offset = 0; offset < promptIds.length; offset += BATCH_SIZE) {
+          const batchIds = promptIds.slice(offset, offset + BATCH_SIZE)
+
+          set({
+            progress: {
+              type: 'response_complete',
+              message: `${model} 実行中... (${completedCount}/${totalCount})`,
+              completedCount,
+              totalCount,
+              totalModels: targetModels.length,
+              totalPrompts: promptItems.length,
+            },
+          })
+
+          const result = await callStep({
+            step: 'execute',
+            model,
+            promptItemIds: batchIds,
+          })
+
+          completedCount += (result as { completed: number }).completed
+        }
+      }
+
+      // Step 3: Judge in batches
+      let remaining = totalCount
+      while (remaining > 0) {
+        set({
+          progress: {
+            type: 'scoring_start',
+            message: `品質採点中... (残り${remaining}件)`,
+            completedCount: totalCount,
+            totalCount,
+          },
+        })
+
+        const judgeResult = await callStep({ step: 'judge', limit: 5 }) as { judged: number; remaining: number }
+        remaining = judgeResult.remaining
+        if (judgeResult.judged === 0) break // No more to judge
+      }
+
+      set({
+        progress: {
+          type: 'report_generating',
+          message: 'レポート生成中...',
+          completedCount: totalCount,
+          totalCount,
+        },
+      })
+
+      // Step 4: Report
+      await callStep({ step: 'report' })
+
+      set({
+        isRunning: false,
+        progress: {
+          type: 'complete',
+          message: '評価が完了しました',
+          completedCount: totalCount,
+          totalCount,
+        },
+      })
+
+      // Refresh runs list
+      get().fetchEvalRuns(projectId)
+
+    } catch (error) {
+      set({
+        isRunning: false,
+        progress: {
+          type: 'error',
+          message: error instanceof Error ? error.message : '評価中にエラーが発生しました',
+        },
+      })
+      throw error
     }
   },
 
