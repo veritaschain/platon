@@ -70,17 +70,32 @@ export const useEvalStore = create<EvalStore>((set, get) => ({
   runEvaluation: async (projectId: string, runId: string) => {
     const stepUrl = `/api/projects/${projectId}/eval-runs/${runId}/step`
 
-    const callStep = async (body: object) => {
-      const res = await fetch(stepUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'ステップ実行に失敗しました' }))
-        throw new Error(err.error)
+    const callStep = async (body: object, maxRetries = 2): Promise<any> => {
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const res = await fetch(stepUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        let data: any
+        try {
+          data = await res.json()
+        } catch {
+          if (attempt < maxRetries) {
+            await new Promise(r => setTimeout(r, 1000))
+            continue
+          }
+          throw new Error(`サーバータイムアウト (${res.status})`)
+        }
+        if (!res.ok) {
+          if (res.status >= 500 && attempt < maxRetries) {
+            await new Promise(r => setTimeout(r, 1000))
+            continue
+          }
+          throw new Error(data.error || 'ステップ実行に失敗しました')
+        }
+        return data
       }
-      return res.json()
     }
 
     try {
