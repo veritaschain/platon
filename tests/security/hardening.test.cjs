@@ -45,7 +45,7 @@ function setup(user = { id: 'owner-a' }) {
     project, promptSetId: sets[i].id, promptSet: { ...sets[i], promptItems: [items[i]] }, status: 'COMPLETED' }));
   const reports = runs.map(evalRun => ({ evalRunId: evalRun.id, evalRun, rankings: [], scoreMatrix: [],
     highlights: [], costProjection: [], recommendation: 'synthetic' }));
-  const responses = runs.map((evalRun, i) => ({ id: 'response-' + i, evalRunId: evalRun.id, evalRun }));
+  const responses = runs.map((evalRun, i) => ({ id: 'response-' + i, evalRunId: evalRun.id, evalRun, promptItem: items[i] }));
   const calls = [];
   function model(name, rows) {
     const get = async ({ where }) => { calls.push([name, 'read', where]); return rows.find(r => matches(r, where)) || null; };
@@ -74,7 +74,7 @@ function setup(user = { id: 'owner-a' }) {
     '@/lib/supabase/server': { createClient: () => ({ auth: { getUser: async () => ({ data: { user } }) } }) },
     '@/lib/eval/orchestrator': { runFullEvaluation: async () => { throw Error('No evaluation permitted in synthetic GET fixture'); } },
   };
-  return { mocks, calls, items };
+  return { mocks, calls, items, responses };
 }
 const prefix = 'src/app/api/projects/[id]/eval-runs/[runId]/';
 for (const route of ['route.ts', 'responses/route.ts', 'report/route.ts', 'report/export/route.ts', 'progress/route.ts']) {
@@ -143,4 +143,59 @@ test('both encryption entrypoints share the existing AES-GCM wire format', () =>
     const parts = a.encrypt('synthetic').split(':'); parts[1] = '00'.repeat(16);
     assert.throws(() => a.decrypt(parts.join(':')));
   } finally { if (previous === undefined) delete process.env.ENCRYPTION_KEY; else process.env.ENCRYPTION_KEY = previous; }
+});
+
+function stepMocks(state) {
+  const fail = async () => { throw Error('Provider call forbidden in authorization test'); };
+  Object.assign(state.mocks, {
+    '@/lib/connectors/registry': { getConnector: () => ({ send: fail }) },
+    '@/lib/db/api-keys': { getUserApiKey: fail },
+    '@/lib/governance/pii-masker': { maskPII: text => ({ masked: text, maskCount: 0 }) },
+    '@/lib/connectors/types': { SUPPORTED_MODELS: [], MODEL_PRICING: {} },
+    '@/lib/eval/judge': {}, '@/lib/eval/metrics-calculator': {},
+    '@/lib/eval/score-aggregator': {}, '@/lib/eval/report-generator': {},
+  });
+  return state.mocks;
+}
+for (const step of ['init', 'execute', 'judge', 'report']) {
+  test('step ' + step + ' rejects a different-project run before any mutation', async () => {
+    const state = setup();
+    const response = await load(prefix + 'step/route.ts', stepMocks(state)).POST(
+      new Request('https://synthetic.test/', { method: 'POST', body: JSON.stringify({ step }) }),
+      { params: { id: 'project-a', runId: 'run-b' } });
+    assert.equal(response.status, 404);
+    assert.equal(state.calls.filter(c => c[1] === 'update' || c[1] === 'delete').length, 0);
+  });
+}
+test('step rejects foreign prompt IDs before reading API keys or calling a provider', async () => {
+  const state = setup();
+  const runModel = state.mocks['@/lib/db/client'].prisma.evalRun;
+  const original = runModel.findFirst;
+  runModel.findFirst = async args => { const run = await original(args); if (run) run.targetModels = ['synthetic-model']; return run; };
+  const response = await load(prefix + 'step/route.ts', stepMocks(state)).POST(
+    new Request('https://synthetic.test/', { method: 'POST', body: JSON.stringify({ step: 'execute', model: 'synthetic-model', promptItemIds: ['item-b'] }) }),
+    { params: { id: 'project-a', runId: 'run-a' } });
+  assert.equal(response.status, 404);
+  assert.equal(state.calls.filter(c => c[1] === 'update').length, 0);
+});
+test('step authentication failure cannot mutate the supplied run in the catch path', async () => {
+  const state = setup();
+  stepMocks(state);
+  state.mocks['@/lib/supabase/server'] = { createClient: () => ({ auth: { getUser: async () => { throw Error('synthetic auth unavailable'); } } }) };
+  const response = await load(prefix + 'step/route.ts', state.mocks).POST(
+    new Request('https://synthetic.test/', { method: 'POST', body: '{}' }),
+    { params: { id: 'project-a', runId: 'run-b' } });
+  assert.equal(response.status, 500);
+  assert.equal(state.calls.filter(c => c[1] === 'update').length, 0);
+});
+test('scope is checked again at mutation after the earlier parent read', async () => {
+  const state = setup();
+  const db = state.mocks['@/lib/db/client'].prisma;
+  const find = db.evalProject.findFirst;
+  db.evalProject.findFirst = async args => { const row = await find(args); if (row) row.userId = 'new-owner'; return row; };
+  const response = await load(itemRoute, state.mocks).PATCH(
+    new Request('https://synthetic.test/', { method: 'PATCH', body: JSON.stringify({ prompt: 'changed' }) }),
+    { params: { id: 'project-a', itemId: 'item-a' } });
+  assert.equal(response.status, 404);
+  assert.equal(state.items[0].prompt, 'synthetic 0');
 });

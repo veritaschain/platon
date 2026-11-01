@@ -22,7 +22,7 @@ export async function GET(
   }
 
   const evalRun = await prisma.evalRun.findUnique({
-    where: { id: params.runId },
+    where: { id: params.runId, projectId: params.id, project: { userId: user.id } },
   })
   if (!evalRun) {
     return new Response('Run not found', { status: 404 })

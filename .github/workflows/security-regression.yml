@@ -10,6 +10,9 @@ jobs:
   regression:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -19,12 +22,14 @@ jobs:
           node-version: '24.22.1'
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Execute actual handlers with synthetic sessions and relation-aware database doubles
-        run: node --test --test-reporter=tap tests/security/*.test.cjs | tee security-results.txt
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/security/*.test.cjs | tee security-results.txt
       - name: Retain reviewed source and synthetic test results
         if: always()
         run: |
           mkdir -p security-evidence
-          git archive --format=zip --output=security-evidence/reviewed-source.zip HEAD src prisma tests package.json package-lock.json tsconfig.json
+          git archive --format=zip --output=security-evidence/reviewed-source.zip HEAD src prisma tests package.json package-lock.json tsconfig.json docs/SECURITY-HARDENING-20261101.md
           git rev-parse HEAD > security-evidence/checkout.txt
           node --version > security-evidence/node-version.txt
           test ! -f security-results.txt || cp security-results.txt security-evidence/
@@ -35,3 +40,16 @@ jobs:
           name: platon-security-${{ github.run_id }}
           path: security-evidence/
           retention-days: 14
+  typecheck:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.22.1'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx --no-install prisma generate
+      - run: npx --no-install tsc --noEmit

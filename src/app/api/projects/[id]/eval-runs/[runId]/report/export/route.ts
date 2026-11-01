@@ -17,7 +17,7 @@ export async function GET(
   if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   const report = await prisma.evalReport.findUnique({
-    where: { evalRunId: params.runId },
+    where: { evalRunId: params.runId, evalRun: { projectId: params.id, project: { userId: user.id } } },
   })
   if (!report) return NextResponse.json({ error: 'Report not found' }, { status: 404 })
 

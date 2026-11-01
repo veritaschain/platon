@@ -20,6 +20,7 @@ export async function POST(
   req: Request,
   { params }: { params: { id: string; runId: string } }
 ) {
+  let authorizedScope: { id: string; projectId: string; project: { userId: string } } | null = null
   try {
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
@@ -30,6 +31,16 @@ export async function POST(
     })
     if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
+    // Bind every step to the requested project and authenticated owner before
+    // reading inputs, fetching provider keys, mutating status or calling AI.
+    const runScope = { id: params.runId, projectId: params.id, project: { userId: user.id } }
+    const authorizedRun = await prisma.evalRun.findFirst({
+      where: runScope,
+      select: { id: true, promptSetId: true, targetModels: true },
+    })
+    if (!authorizedRun) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    authorizedScope = runScope
+
     const body = await req.json()
     const { step } = body
     console.log(`[eval-step] step=${step}, runId=${params.runId}`)
@@ -39,7 +50,7 @@ export async function POST(
     // ============================================================
     if (step === 'init') {
       const run = await prisma.evalRun.findUnique({
-        where: { id: params.runId },
+        where: runScope,
         include: {
           promptSet: { include: { promptItems: { orderBy: { orderIndex: 'asc' } } } },
         },
@@ -47,11 +58,11 @@ export async function POST(
       if (!run) return NextResponse.json({ error: 'Run not found' }, { status: 404 })
 
       await prisma.evalRun.update({
-        where: { id: params.runId },
+        where: runScope,
         data: { status: 'RUNNING' },
       })
       await prisma.evalProject.update({
-        where: { id: params.id },
+        where: { id: params.id, userId: user.id },
         data: { status: 'RUNNING' },
       })
 
@@ -74,6 +85,19 @@ export async function POST(
         promptItemIds: string[]
       }
 
+      if (!Array.isArray(promptItemIds) || promptItemIds.length < 1 || promptItemIds.length > 10 ||
+          promptItemIds.some(id => typeof id !== 'string') || new Set(promptItemIds).size !== promptItemIds.length ||
+          !authorizedRun.targetModels.includes(model)) {
+        return NextResponse.json({ error: 'Invalid execution scope' }, { status: 400 })
+      }
+      const promptItems = await prisma.promptItem.findMany({
+        where: { id: { in: promptItemIds }, promptSetId: authorizedRun.promptSetId,
+          promptSet: { projectId: params.id, project: { userId: user.id } } },
+      })
+      if (promptItems.length !== promptItemIds.length) {
+        return NextResponse.json({ error: 'Not found' }, { status: 404 })
+      }
+
       const modelInfo = SUPPORTED_MODELS.find(m => m.model === model)
       if (!modelInfo) return NextResponse.json({ error: `Unknown model: ${model}` }, { status: 400 })
 
@@ -90,11 +114,6 @@ export async function POST(
         temperature: 0.3,
         timeoutMs: TIMEOUT_MS,
       }
-
-      // Load prompt texts
-      const promptItems = await prisma.promptItem.findMany({
-        where: { id: { in: promptItemIds } },
-      })
 
       // Execute all prompts in this batch in parallel
       const results = await Promise.allSettled(
@@ -155,12 +174,12 @@ export async function POST(
       const { offset = 0, limit = 5 } = body as { offset?: number; limit?: number }
 
       await prisma.evalRun.update({
-        where: { id: params.runId },
+        where: runScope,
         data: { status: 'SCORING' },
       })
 
       const run = await prisma.evalRun.findUnique({
-        where: { id: params.runId },
+        where: runScope,
         include: { project: true },
       })
       if (!run) return NextResponse.json({ error: 'Run not found' }, { status: 404 })
@@ -171,6 +190,8 @@ export async function POST(
       const unjudged = await prisma.modelResponse.findMany({
         where: {
           evalRunId: params.runId,
+          evalRun: { projectId: params.id, project: { userId: user.id } },
+          promptItem: { promptSetId: authorizedRun.promptSetId, promptSet: { projectId: params.id, project: { userId: user.id } } },
           status: 'COMPLETED',
           judgeScore: null,
         },
@@ -268,6 +289,8 @@ ${resp.content}
       const remaining = await prisma.modelResponse.count({
         where: {
           evalRunId: params.runId,
+          evalRun: { projectId: params.id, project: { userId: user.id } },
+          promptItem: { promptSetId: authorizedRun.promptSetId, promptSet: { projectId: params.id, project: { userId: user.id } } },
           status: 'COMPLETED',
           judgeScore: null,
         },
@@ -281,7 +304,7 @@ ${resp.content}
     // ============================================================
     if (step === 'report') {
       const run = await prisma.evalRun.findUnique({
-        where: { id: params.runId },
+        where: runScope,
         include: {
           project: true,
           promptSet: { include: { promptItems: true } },
@@ -292,7 +315,8 @@ ${resp.content}
       const useCaseProfile = run.project.useCaseProfile as UseCaseProfile | null
 
       const responsesWithScores = await prisma.modelResponse.findMany({
-        where: { evalRunId: params.runId },
+        where: { evalRunId: params.runId, evalRun: { projectId: params.id, project: { userId: user.id } },
+          promptItem: { promptSetId: authorizedRun.promptSetId, promptSet: { projectId: params.id, project: { userId: user.id } } } },
         include: { judgeScore: true },
       })
 
@@ -346,11 +370,11 @@ ${resp.content}
       })
 
       await prisma.evalRun.update({
-        where: { id: params.runId },
+        where: runScope,
         data: { status: 'COMPLETED', completedAt: new Date(), actualCostUsd: actualCost },
       })
       await prisma.evalProject.update({
-        where: { id: params.id },
+        where: { id: params.id, userId: user.id },
         data: { status: 'COMPLETED' },
       })
 
@@ -361,11 +385,13 @@ ${resp.content}
   } catch (error) {
     console.error('[eval-step] Error:', error)
 
-    // Mark as failed
-    await prisma.evalRun.update({
-      where: { id: params.runId },
-      data: { status: 'FAILED' },
-    }).catch(() => {})
+    // Do not mutate an untrusted run ID after an authentication/lookup error.
+    if (authorizedScope) {
+      await prisma.evalRun.update({
+        where: authorizedScope,
+        data: { status: 'FAILED' },
+      }).catch(() => {})
+    }
 
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'エラーが発生しました' },
