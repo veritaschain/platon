@@ -23,6 +23,16 @@ export async function runFullEvaluation(
     })
 
     const useCaseProfile = evalRun.project.useCaseProfile as UseCaseProfile | null
+    // Older execution paths could associate a foreign prompt with this run.
+    // Keep those historical rows out of both judging and report aggregation.
+    const responseScope = {
+      evalRunId,
+      evalRun: { projectId: evalRun.projectId, project: { userId } },
+      promptItem: {
+        promptSetId: evalRun.promptSetId,
+        promptSet: { projectId: evalRun.projectId, project: { userId } },
+      },
+    }
 
     // Update status to RUNNING
     await prisma.evalRun.update({
@@ -76,7 +86,7 @@ export async function runFullEvaluation(
 
     // Load all completed responses
     const allResponses = await prisma.modelResponse.findMany({
-      where: { evalRunId, status: 'COMPLETED' },
+      where: { ...responseScope, status: 'COMPLETED' },
       include: { promptItem: true },
     })
 
@@ -102,7 +112,7 @@ export async function runFullEvaluation(
 
     // Reload responses with judge scores
     const responsesWithScores = await prisma.modelResponse.findMany({
-      where: { evalRunId },
+      where: responseScope,
       include: { judgeScore: true },
     })
 

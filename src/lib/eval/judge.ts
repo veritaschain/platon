@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db/client'
 import { getConnector } from '@/lib/connectors/registry'
 import { getUserApiKey } from '@/lib/db/api-keys'
+import { maskPII } from '@/lib/governance/pii-masker'
 import { SUPPORTED_MODELS } from '@/lib/connectors/types'
 import type { ConnectorConfig, ConnectorMessage, Provider } from '@/lib/connectors/types'
 import type { JudgeScoreResult } from './types'
@@ -89,7 +90,9 @@ async function judgeWithRetry(
   const messages: ConnectorMessage[] = [
     {
       role: 'user',
-      content: `あなたはAI回答の品質評価者です。
+      // Mask the assembled message so the original prompt, hints, profile and
+      // model response all pass through the same egress guard, including retries.
+      content: maskPII(`あなたはAI回答の品質評価者です。
 以下のユーザー質問とAIの回答を評価してください。
 
 ## ユーザーのユースケース
@@ -112,7 +115,7 @@ ${input.response}
   "conciseness": { "score": 1-5, "reason": "..." },
   "tone": { "score": 1-5, "reason": "..." },
   "instruction_following": { "score": 1-5, "reason": "..." }
-}`,
+}`).masked,
     },
   ]
 

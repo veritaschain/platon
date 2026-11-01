@@ -230,7 +230,9 @@ export async function POST(
         unjudged.map(async (resp) => {
           const judgeMessages: ConnectorMessage[] = [{
             role: 'user',
-            content: `あなたはAI回答の品質評価者です。以下のユーザー質問とAIの回答を評価してください。
+            // The judge is another external AI call. Mask every interpolated
+            // field after assembly, not only the earlier target-model prompt.
+            content: maskPII(`あなたはAI回答の品質評価者です。以下のユーザー質問とAIの回答を評価してください。
 
 ## ユースケース
 ${useCaseDesc}
@@ -245,7 +247,7 @@ ${resp.promptItem.prompt}
 ${resp.content}
 
 以下の5軸で1-5点で採点し、JSON形式のみで出力してください。
-{"accuracy":{"score":1-5,"reason":"根拠"},"relevance":{"score":1-5,"reason":"..."},"conciseness":{"score":1-5,"reason":"..."},"tone":{"score":1-5,"reason":"..."},"instruction_following":{"score":1-5,"reason":"..."}}`,
+{"accuracy":{"score":1-5,"reason":"根拠"},"relevance":{"score":1-5,"reason":"..."},"conciseness":{"score":1-5,"reason":"..."},"tone":{"score":1-5,"reason":"..."},"instruction_following":{"score":1-5,"reason":"..."}}`).masked,
           }]
 
           try {
