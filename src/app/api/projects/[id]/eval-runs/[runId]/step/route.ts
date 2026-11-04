@@ -19,11 +19,12 @@ const MAX_TOKENS = 1024
 
 export async function POST(
   req: Request,
-  { params }: { params: { id: string; runId: string } }
+  { params: paramsPromise }: { params: Promise<{ id: string; runId: string }> }
 ) {
+  const params = await paramsPromise
   let authorizedScope: BoundEvaluationScope | null = null
   try {
-    const supabase = createClient()
+    const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 

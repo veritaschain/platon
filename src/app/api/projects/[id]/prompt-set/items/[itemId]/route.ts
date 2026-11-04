@@ -4,9 +4,10 @@ import { createClient } from '@/lib/supabase/server'
 
 export async function PATCH(
   req: Request,
-  { params }: { params: { id: string; itemId: string } }
+  { params: paramsPromise }: { params: Promise<{ id: string; itemId: string }> }
 ) {
-  const supabase = createClient()
+  const params = await paramsPromise
+  const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -37,9 +38,10 @@ export async function PATCH(
 
 export async function DELETE(
   _: Request,
-  { params }: { params: { id: string; itemId: string } }
+  { params: paramsPromise }: { params: Promise<{ id: string; itemId: string }> }
 ) {
-  const supabase = createClient()
+  const params = await paramsPromise
+  const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
