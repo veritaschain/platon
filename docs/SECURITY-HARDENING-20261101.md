@@ -2,6 +2,69 @@
 
 This change is not a production deployment or a complete security audit.
 
+## November 5 refresh against current main
+
+This draft now incorporates main
+`36283f44a24482e4cbc06acbdf0886b8d4c1fa59`, which includes the separate tenant
+repair (PR #3), supported Next.js 15 migration (PR #4), and compatible dependency
+patches (PR #5). The previous draft head was
+`709802806f1da8c2829ebe548ba3235487c3073d`; both histories are preserved by the
+merge. Earlier validation counts in the historical provenance below apply to
+their named revisions, not automatically to this refreshed candidate.
+
+The resulting application keeps main's Next.js 15.5.29 / React 19.2.9 versions,
+lockfile, asynchronous cookie/client/route-parameter APIs, and merged tenant
+predicates. The original draft's strict encryption implementation, additive
+migration, aggregate-only audit CLI, crypto/audit tests and rollout gates are
+retained. The only application-source differences from current main are the two
+encryption entrypoints. Existing `iv:tag:ciphertext` format compatibility does not
+establish which key was used for any deployed record.
+
+All three workflows remain enabled. The Prisma schema is identical in the old
+draft and current main (SHA-256
+`1b1d5003a2498c57fc921a091cac9efc2afda25f7e9a493b9a3004dadf8c9033`), so the existing
+tenant job's exact schema/fixture guards remain valid and unchanged:
+
+| Workflow path | What it verifies |
+| --- | --- |
+| `tenant-boundaries.yml` | Existing desired-schema compatibility in a fresh `db push` fixture, real route/evaluator predicates, and the strict three-failure/two-valid-control check against `062d09e...`. |
+| `security-regression.yml` | Strict crypto/audit regressions, actual tracked migration application, legacy data preservation, RLS/rollback/audit integration, and four named evaluator failures plus the valid control against `bf19c64...`. |
+| `next-framework.yml` | Ordinary production compilation/type checking and synthetic-setting HTTP smoke checks on Next 15. |
+
+The two PostgreSQL jobs use separate disposable service databases on separate
+runners. The `db push` fixture is not evidence that the tracked migration has
+passed, and no `db push` step is added to the migration job. No schema guard,
+negative control, authorization assertion or production rollout gate is relaxed.
+The tenant source archive also includes `scripts`, because the combined security
+suite now exercises the retained audit CLI.
+
+Local refresh verification: all **94 security tests passed**, including the
+retained encryption/audit cases and the six Next async-request cases; no failures
+or skips. Clean lockfile installation, Prisma client generation, TypeScript
+checking, production build/HTTP smoke, and the strict old-source tenant control
+also passed. The smoke check used synthetic settings, returned 200 for login,
+redirected the anonymous dashboard to login and returned 401 for all five API
+checks; no synchronous request-API warning or synthetic private-setting marker
+in public static files was observed. The latest CI results for this refreshed commit must separately
+establish the real PostgreSQL outcomes; the previous draft's 107-result run is
+historical evidence only.
+
+### Evidence still required before this draft can leave draft status
+
+| Required evidence | Current state and safe next step |
+| --- | --- |
+| Target database inventory | Not collected in this refresh. Confirm the actual target, table definitions, `_prisma_migrations` history, any prior `db push`, owners, grants and policies. Existing evaluation tables need a reviewed reconciliation/baseline plan before applying the additive migration. |
+| Historical key inventory | Not collected in this refresh. Run the existing aggregate-only audit with a dedicated authorized read role and `PLATON_AUDIT_DATABASE_URL` supplied through the approved secret mechanism. Resolve known-public-key matches, malformed/oversized or otherwise uninspected records before strict-key deployment. Never paste a URL, key, ciphertext or plaintext into PR evidence. |
+| Deployment key configuration | Not inspected or changed here. Verify that the intended runtime has a valid non-public key compatible with retained encrypted records. Any re-encryption or credential rotation requires its own reviewed procedure and restricted backup; this branch performs neither. |
+| Target Supabase authentication/roles | Not tested here. Verify the real target's authentication/JWT and database-role behavior using separate synthetic users before rollout. Disposable PostgreSQL tests do not substitute for the deployed Supabase configuration. |
+
+These missing inventories are deployment prerequisites, not failures inferred
+from unavailable production access. No production environment, database or key
+was read or changed during this refresh. Keep PR #2 **Draft** even if the refreshed
+CI jobs pass.
+
+## Retained hardening scope
+
 Project ownership is part of the child query/mutation for prompt PATCH/DELETE and eval-run, response, report and export reads. Progress execution checks the run's project and owner before invoking the evaluator. Step execution checks the run before parsing its requested action, rejects prompt IDs outside that run's prompt set before fetching API keys, and never mutates a supplied run ID on authentication failure.
 
 The November 4 follow-up binds the full evaluator and step evaluator to the requesting user, project, run and original prompt set. The worker independently authorizes its entry instead of relying on an earlier SSE handler check. Current ownership and prompt/response membership are checked again immediately before each provider dispatch and retry. ModelResponse, JudgeScore and EvalReport persistence uses scoped relational `connect` predicates; status and cost mutations retain their owner/project predicates. A committed ownership or membership change during a provider call therefore blocks later persistence. Authorization failures are propagated rather than treated as provider failures, and raw database errors are not returned in the SSE stream. Failed progress notifications cannot discard an already obtained execution result.
@@ -38,7 +101,7 @@ Both judge entrypoints and recommendation generation apply the existing PII mask
 
 Provider integration, end-to-end evaluation, full application security and formal VAP conformity remain unestablished.
 
-## Test provenance
+## Historical test provenance
 
 Baseline source: 062d09ea1420e427769d5c7fe42c589e9d2d6369. The regression-only commit a517598c61ef892a7e2a379703567d9aeef77e87 produced 31 cases, 19 failures and 12 passes against unmodified application code. Some failures concern explicit error classification rather than distinct security vulnerabilities. Its initial workflow status incorrectly reflected tee's exit status, so the TAP output, not that green status, is the baseline evidence. The updated workflow uses explicit bash pipefail. Fixes and additional execution-boundary cases are recorded in subsequent CI runs.
 

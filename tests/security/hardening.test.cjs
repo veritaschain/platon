@@ -5,7 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const ts = require('typescript');
-const ROOT = path.resolve(__dirname, '../..');
+const ROOT = process.env.PLATON_TEST_SOURCE_ROOT
+  ? path.resolve(process.env.PLATON_TEST_SOURCE_ROOT) : path.resolve(__dirname, '../..');
 
 function load(file, mocks = {}) {
   const filename = path.resolve(ROOT, file);

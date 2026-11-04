@@ -5,8 +5,9 @@ import { estimateEvalCost } from '@/lib/eval/execution-engine'
 import { runFullEvaluation } from '@/lib/eval/orchestrator'
 import { getDailyMonthlyUsage } from '@/lib/db/usage'
 
-export async function GET(_: Request, { params }: { params: { id: string } }) {
-  const supabase = createClient()
+export async function GET(_: Request, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
+  const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
@@ -22,8 +23,9 @@ export async function GET(_: Request, { params }: { params: { id: string } }) {
   return NextResponse.json(runs)
 }
 
-export async function POST(req: Request, { params }: { params: { id: string } }) {
-  const supabase = createClient()
+export async function POST(req: Request, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
+  const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 

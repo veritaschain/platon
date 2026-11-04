@@ -1,0 +1,133 @@
+name: Platon tenant boundary regression
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.22.1'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Exercise the actual handlers and evaluators with synthetic sessions
+        run: |
+          set -euo pipefail
+          node --test --test-reporter=tap tests/security/*.test.cjs | tee tenant-results.txt
+      - run: npx --no-install prisma generate
+      - run: npx --no-install tsc --noEmit
+      - name: Check out the immutable main source before this repair
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: 062d09ea1420e427769d5c7fe42c589e9d2d6369
+          path: baseline-tenant-source
+          persist-credentials: false
+      - name: Require the three original cross-project failures and two valid controls
+        env:
+          PLATON_TEST_SOURCE_ROOT: ${{ github.workspace }}/baseline-tenant-source
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline-tenant-source rev-parse HEAD)" = 062d09ea1420e427769d5c7fe42c589e9d2d6369
+          set +e
+          node --test --test-reporter=tap --test-name-pattern='^(PATCH refuses foreign-project child without changing it: item-b|DELETE refuses foreign-project child without changing it: item-b|step init rejects a different-project run before any mutation|PATCH retains same-project operation|route\.ts retains same-project access)$' tests/security/hardening.test.cjs | tee tenant-baseline.txt
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          test "${pipeline_status[0]}" -eq 1
+          test "${pipeline_status[1]}" -eq 0
+          node tests/security/check-baseline.cjs tenant-baseline.txt
+      - name: Retain reviewed source and test evidence
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p tenant-evidence
+          git archive --format=zip --output=tenant-evidence/reviewed-source.zip HEAD src prisma scripts tests .github/workflows/tenant-boundaries.yml package.json package-lock.json tsconfig.json docs/TENANT-BOUNDARY-REPAIR-20261105.md
+          git rev-parse HEAD > tenant-evidence/checkout.txt
+          node --version > tenant-evidence/node-version.txt
+          for result in tenant-results.txt tenant-baseline.txt; do
+            if test -f "$result"; then cp "$result" tenant-evidence/; fi
+          done
+          sha256sum tenant-evidence/reviewed-source.zip > tenant-evidence/source.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: platon-tenant-${{ github.run_id }}
+          path: tenant-evidence/
+          retention-days: 14
+  existing-schema-postgres:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        # The same official PostgreSQL 16 digest used by the broader draft.
+        image: postgres:16@sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a
+        env:
+          POSTGRES_DB: platon_security_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: platon_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d platon_security_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PLATON_TEST_DATABASE_URL: postgresql://postgres:platon_test_only@127.0.0.1:5432/platon_security_test
+      DATABASE_URL: postgresql://postgres:platon_test_only@127.0.0.1:5432/platon_security_test
+      DIRECT_URL: postgresql://postgres:platon_test_only@127.0.0.1:5432/platon_security_test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.22.1'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: npx --no-install prisma generate
+      - name: Populate only the empty CI service from the unchanged main schema
+        run: |
+          set -euo pipefail
+          node - <<'JS'
+          const assert = require('node:assert/strict');
+          const fs = require('node:fs');
+          const { createHash } = require('node:crypto');
+          const fixture = 'postgresql://postgres:platon_test_only@127.0.0.1:5432/platon_security_test';
+          assert.equal(process.env.GITHUB_ACTIONS, 'true');
+          for (const key of ['PLATON_TEST_DATABASE_URL', 'DATABASE_URL', 'DIRECT_URL']) assert.equal(process.env[key], fixture);
+          assert.equal(createHash('sha256').update(fs.readFileSync('prisma/schema.prisma')).digest('hex'), '1b1d5003a2498c57fc921a091cac9efc2afda25f7e9a493b9a3004dadf8c9033');
+          JS
+          npx --no-install prisma db push --skip-generate | tee tenant-schema.txt
+      - name: Exercise the real database relations and committed ownership changes
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 --test-reporter=tap tests/database/routes-authorization.test.cjs tests/database/evaluator-authorization.test.cjs | tee tenant-database.txt
+      - name: Retain database test evidence
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p tenant-database-evidence
+          git rev-parse HEAD > tenant-database-evidence/checkout.txt
+          sha256sum prisma/schema.prisma > tenant-database-evidence/schema.sha256
+          for result in tenant-schema.txt tenant-database.txt; do
+            if test -f "$result"; then cp "$result" tenant-database-evidence/; fi
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: platon-tenant-database-${{ github.run_id }}
+          path: tenant-database-evidence/
+          retention-days: 14
