@@ -20,18 +20,44 @@ const SCORE = JSON.stringify(Object.fromEntries(
     .map(axis => [axis, { score: 4, reason: 'Synthetic justified score' }])
 ));
 
-function testUrl() {
-  const value = process.env.PLATON_TEST_DATABASE_URL;
-  assert.ok(value, 'PLATON_TEST_DATABASE_URL is required; application URLs are never used.');
-  const url = new URL(value);
-  assert.ok(['postgres:', 'postgresql:'].includes(url.protocol));
-  assert.ok(['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname), 'Loopback test database required.');
-  assert.match(decodeURIComponent(url.pathname.slice(1)), /^platon_security_test(?:_[a-z0-9]+)*$/);
-  assert.equal(url.search, '');
-  assert.equal(url.hash, '');
-  assert.ok(url.username);
+function testUrl(value = process.env.PLATON_TEST_DATABASE_URL) {
+  const check = (condition, message) => { if (!condition) throw new Error(message); };
+  check(typeof value === 'string' && value.length > 0,
+    'PLATON_TEST_DATABASE_URL is required; application URLs are never used.');
+  check(!/[\x00-\x20\x7f\\?#]/.test(value), 'Test URL options, fragments and control characters are forbidden.');
+  let url, database, username, password;
+  try {
+    url = new URL(value);
+    database = decodeURIComponent(url.pathname.slice(1));
+    username = decodeURIComponent(url.username);
+    password = decodeURIComponent(url.password);
+  } catch { throw new Error('Invalid test database URL.'); }
+  check(['postgres:', 'postgresql:'].includes(url.protocol), 'PostgreSQL test URL required.');
+  check(['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname), 'Loopback test database required.');
+  check(/^platon_security_test(?:_[a-z0-9]+)*$/.test(database), 'A dedicated test database is required.');
+  check(url.search === '' && url.hash === '', 'Test URL options and fragments are forbidden.');
+  check(/^[A-Za-z_][A-Za-z0-9_]*$/.test(username), 'An explicit test user is required.');
+  check(!/[\x00-\x1f\x7f]/.test(password), 'Invalid test password encoding.');
+  check(url.port === '' || Number(url.port) > 0, 'Invalid test port.');
   return url.href;
 }
+
+if (!baselineProbe) test('evaluator database URL guard does not expose rejected credentials', () => {
+  const marker = 'SYNTHETIC_CREDENTIAL_MARKER';
+  for (const value of [
+    'invalid:' + marker,
+    `postgresql://postgres:${marker}@remote.invalid/platon_security_test`,
+    `postgresql://postgres:${marker}@127.0.0.1/production`,
+    `postgresql://postgres:${marker}@127.0.0.1/platon_security_test?host=remote.invalid`,
+    `postgresql://postgres:${marker}@127.0.0.1/platon_security_test#fragment`,
+    `postgresql://postgres:${marker}@127.0.0.1:0/platon_security_test`,
+  ]) {
+    assert.throws(() => testUrl(value), error => {
+      assert.ok(!JSON.stringify({ ...error, message: error.message, stack: error.stack }).includes(marker));
+      return true;
+    });
+  }
+});
 
 function loader(mocks) {
   const cache = new Map();

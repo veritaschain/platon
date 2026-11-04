@@ -344,15 +344,43 @@ test('PostgreSQL migrations preserve legacy data and enforce server-only RLS', {
     db.inSchema(schemas.drift, oldFixture + `CREATE TABLE "EvalProject" (id TEXT PRIMARY KEY, marker TEXT NOT NULL);
       INSERT INTO "EvalProject" VALUES ('existing', 'must-survive');`);
     const before = rowSnapshot(db, schemas.drift, [...oldTables, 'EvalProject']);
+    const beforeCatalog = schemaCatalog(db, schemas.drift, enumNames);
+    const beforeHistory = rowSnapshot(db, schemas.drift, ['_prisma_migrations'])._prisma_migrations;
+    function assertApplicationStatePreserved() {
+      assert.deepEqual(rowSnapshot(db, schemas.drift, [...oldTables, 'EvalProject']), before);
+      assert.deepEqual(schemaCatalog(db, schemas.drift, enumNames), beforeCatalog);
+      assert.equal(db.inSchema(schemas.drift, `SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+        WHERE n.nspname = current_schema() AND t.typname IN (${sqlList(enumNames.filter(name => name !== 'Provider'))});`), '0');
+      assert.equal(db.inSchema(schemas.drift, `SELECT is_nullable FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'UsageLog' AND column_name = 'modelRunId';`), 'NO');
+    }
+
+    // Observe PostgreSQL's original error directly. Prisma 5.22 can mask it
+    // with 25P02 when it tries to record a failure inside the aborted explicit
+    // transaction. Use the unchanged tracked SQL, with its own BEGIN/COMMIT;
+    // psql's ON_ERROR_STOP closes the connection and rolls back on the error.
+    const migrationSql = fs.readFileSync(path.join(migrationRoot, addedMigration, 'migration.sql'), 'utf8');
+    const direct = db.raw(`SET search_path = ${ident(schemas.drift)};
+SET statement_timeout = '10s';
+${migrationSql}`);
+    assert.equal(direct.error, undefined);
+    assert.notEqual(direct.status, 0);
+    assert.match(direct.stderr, /\b42P07\b/);
+    assert.match(direct.stderr, /relation "EvalProject" already exists/);
+    assertApplicationStatePreserved();
+    assert.deepEqual(rowSnapshot(db, schemas.drift, ['_prisma_migrations'])._prisma_migrations, beforeHistory);
+
+    // Independently require migrate deploy to fail on the same conflicting
+    // state, preserving application data/DDL and all prior applied history.
+    // A failed migration-history entry is allowed; successful adoption is not.
     const result = deploy(schemas.drift, complete);
     assert.equal(result.error, undefined);
     assert.notEqual(result.status, 0);
-    assert.match((result.stdout || '') + (result.stderr || ''), /already exists|42P07/);
-    assert.deepEqual(rowSnapshot(db, schemas.drift, [...oldTables, 'EvalProject']), before);
-    assert.equal(db.inSchema(schemas.drift, `SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
-      WHERE n.nspname = current_schema() AND t.typname IN (${sqlList(enumNames.filter(name => name !== 'Provider'))});`), '0');
-    assert.equal(db.inSchema(schemas.drift, `SELECT is_nullable FROM information_schema.columns
-      WHERE table_schema = current_schema() AND table_name = 'UsageLog' AND column_name = 'modelRunId';`), 'NO');
+    assert.ok(((result.stdout || '') + (result.stderr || '')).includes(addedMigration));
+    assertApplicationStatePreserved();
+    const afterHistory = rowSnapshot(db, schemas.drift, ['_prisma_migrations'])._prisma_migrations;
+    assert.deepEqual(afterHistory.filter(row => row.migration_name !== addedMigration), beforeHistory);
+    assert.ok(afterHistory.filter(row => row.migration_name === addedMigration).every(row => row.finished_at === null));
   });
 
   db.inSchema(schemas.fresh, currentFixture);

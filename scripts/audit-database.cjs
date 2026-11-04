@@ -30,7 +30,7 @@ const SQL = Object.freeze({
     pg_catalog.current_setting('row_security') = 'off' AS "rowSecurityErrorsOnFilter"`,
   metadata: `WITH requested ("name") AS (VALUES
       ('UserApiKey'), ('UsageLog'), ('EventLog'), ('EvalProject'), ('PromptSet'),
-      ('PromptItem'), ('EvalRun'), ('ModelResponse'), ('JudgeScore'), ('EvalReport')
+      ('PromptItem'), ('EvalRun'), ('ModelResponse'), ('JudgeScore'), ('EvalReport'))
     SELECT requested."name", c.oid IS NOT NULL AS "present",
       COALESCE(c.relrowsecurity, false) AS "rowSecurityEnabled",
       COALESCE(c.relforcerowsecurity, false) AS "rowSecurityForced",

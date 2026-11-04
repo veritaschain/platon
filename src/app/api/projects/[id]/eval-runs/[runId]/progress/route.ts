@@ -62,7 +62,7 @@ export async function GET(
 
         send({ type: 'complete', message: '評価が完了しました' })
       } catch (error) {
-        console.error('[progress] Evaluation error:', error)
+        console.error('[progress] Evaluation failed')
         send({
           type: 'error',
           message: '評価中にエラーが発生しました',

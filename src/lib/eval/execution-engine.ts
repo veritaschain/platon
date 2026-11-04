@@ -205,7 +205,7 @@ async function executeWithRetry(
       provider,
       model,
       status,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: 'Provider request failed',
       latencyMs,
     })
 

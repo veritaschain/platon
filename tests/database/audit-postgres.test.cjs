@@ -196,7 +196,7 @@ test('PostgreSQL audit counts known public keys without changing existing rows',
     requireCondition(!failed, 'Isolated audit test cleanup or preservation verification failed.');
   });
 
-  await safeStep('Isolated audit database preflight or fixture setup failed.', async () => {
+  await safeStep('Isolated audit database preflight failed.', async () => {
     const preflight = await db.$queryRawUnsafe(`SELECT
       pg_catalog.current_database() = 'platon_security_test' AS "dedicatedDatabase",
       pg_catalog.current_setting('server_version_num')::integer BETWEEN 160000 AND 169999 AS "supportedVersion",
@@ -208,15 +208,35 @@ test('PostgreSQL audit counts known public keys without changing existing rows',
     requireCondition(await db.userApiKey.count({ where: { OR: [
       { id: { startsWith: prefix } }, { userId: { startsWith: prefix } },
     ] } }) === 0, 'Generated fixture prefix already exists.');
+  });
+
+  // Parse and plan the exact exported query against PostgreSQL before any
+  // fixture writes. A DB double cannot detect SQL grammar/catalog mistakes.
+  // EXPLAIN without ANALYZE does not execute this metadata SELECT. Never print
+  // its plan or the driver error; the fixed stage label identifies the failure.
+  await safeStep('PostgreSQL could not plan the audit metadata SQL.', async () => {
+    const plan = await db.$queryRawUnsafe('EXPLAIN (COSTS OFF) ' + SQL.metadata);
+    requireCondition(Array.isArray(plan) && plan.length > 0, 'Metadata SQL did not produce a query plan.');
+  });
+
+  await safeStep('Initial aggregate audit failed after metadata SQL planning.', async () => {
     baseline = await auditDatabase(db, { readOnly: true });
+  });
+  await safeStep('The isolated public schema is missing required tables or row security.', async () => {
     requireCondition(baseline.tables.every(table => table.present && table.rowSecurityEnabled),
       'Apply the current migrations to the isolated public schema before this suite.');
+  });
+  await safeStep('Could not snapshot application rows before fixture creation.', async () => {
     initialRows = await snapshotApplicationRows(db);
+  });
+  await safeStep('Synthetic audit fixture insertion failed.', async () => {
     const rows = seedRows(prefix);
     seedAttempted = true;
     const inserted = await db.userApiKey.createMany({ data: rows });
     requireCondition(inserted.count === 108, 'Synthetic key fixtures were not inserted completely.');
     for (const row of rows) row.encryptedKey = null;
+  });
+  await safeStep('Could not snapshot application rows after fixture creation.', async () => {
     fixtureRows = await snapshotApplicationRows(db);
   });
 

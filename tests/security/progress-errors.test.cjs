@@ -10,6 +10,7 @@ test('progress SSE never returns internal evaluator or database error details', 
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
   }).outputText;
   const called = [];
+  const logs = [];
   const mocks = {
     '@/lib/supabase/server': { createClient: () => ({ auth: { getUser: async () => ({ data: { user: { id: 'fixture-owner' } } }) } }) },
     '@/lib/db/client': { prisma: {
@@ -25,7 +26,7 @@ test('progress SSE never returns internal evaluator or database error details', 
   new Function('require', 'module', 'exports', 'console', source)(name => {
     assert.ok(Object.hasOwn(mocks, name), 'Unexpected route import');
     return mocks[name];
-  }, module, module.exports, { log() {}, error() {} });
+  }, module, module.exports, { log() {}, error: (...args) => logs.push(args) });
   const response = await module.exports.GET(new Request('https://synthetic.test/'), {
     params: { id: 'fixture-project', runId: 'fixture-run' },
   });
@@ -35,4 +36,5 @@ test('progress SSE never returns internal evaluator or database error details', 
   assert.deepEqual(called, [['fixture-run', 'fixture-owner', 'fixture-project']]);
   assert.doesNotMatch(body, /PRIVATE_DATABASE|P2025/);
   assert.match(body, /評価中にエラーが発生しました/);
+  assert.deepEqual(logs, [['[progress] Evaluation failed']]);
 });
