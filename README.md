@@ -46,7 +46,7 @@ http://localhost:3000 にアクセス
 ## 機能
 
 ### Phase 1: Foundation ✅
-- Next.js 14 App Router + TypeScript
+- Next.js 15 App Router + TypeScript
 - Supabase Auth（メール/パスワード認証）
 - 3ペインレイアウト（サイドバー・チャット・コストパネル）
 - Prismaスキーマ（全テーブル）
@@ -77,7 +77,7 @@ http://localhost:3000 にアクセス
 ## アーキテクチャ
 
 ```
-Next.js 14 (App Router)
+Next.js 15 (App Router)
 ├── API Routes (/api/*)
 ├── Supabase Auth + PostgreSQL (Prisma)
 ├── AI Connectors (OpenAI / Anthropic / Google)
@@ -94,8 +94,11 @@ Next.js 14 (App Router)
 
 ## 技術スタック
 
-- Next.js 14, React 18, TypeScript
+- Next.js 15.5.29, React 19.2.9, TypeScript
 - Zustand, TanStack Query
 - Prisma, PostgreSQL (Supabase)
 - Tailwind CSS, Radix UI
 - OpenAI SDK, Anthropic SDK, Google Generative AI SDK
+
+Next.js 15 への移行内容、検証手順、残存する依存関係の指摘は
+[移行記録](docs/NEXT15-UPGRADE-20261105.md)を参照してください。

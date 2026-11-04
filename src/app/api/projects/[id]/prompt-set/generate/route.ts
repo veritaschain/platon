@@ -10,9 +10,10 @@ import {
 import type { PromptCategory } from '@prisma/client'
 import type { HearingAnswers, UseCaseProfile, GeneratedPrompt } from '@/lib/eval/types'
 
-export async function POST(req: Request, { params }: { params: { id: string } }) {
+export async function POST(req: Request, { params: paramsPromise }: { params: Promise<{ id: string }> }) {
+  const params = await paramsPromise
   try {
-    const supabase = createClient()
+    const supabase = await createClient()
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
