@@ -16,6 +16,7 @@ function load(file, mocks = {}) {
   const module = { exports: {} };
   function resolve(name) {
     if (Object.hasOwn(mocks, name)) return mocks[name];
+    if (name === '@/lib/eval/scope') return load('src/lib/eval/scope.ts', mocks);
     if (name.startsWith('.')) return load(path.relative(ROOT, path.resolve(path.dirname(filename), name + '.ts')), mocks);
     throw Error('Unexpected test import: ' + name);
   }
@@ -51,8 +52,8 @@ function setup({ retry = false } = {}) {
   const saved = [];
   const prisma = {
     evalProject: { findFirst: async () => project },
-    evalRun: { findFirst: async () => run, findUnique: async () => run, update: async () => run },
-    modelResponse: { findMany: async () => [modelResponse], count: async () => 0 },
+    evalRun: { findFirst: async () => run, findUnique: async () => run, findUniqueOrThrow: async () => run, update: async () => run },
+    modelResponse: { findMany: async () => [modelResponse], findUniqueOrThrow: async () => modelResponse, count: async () => 0 },
     judgeScore: { create: async ({ data }) => { saved.push(data); return data; } },
   };
   const mocks = {
@@ -91,6 +92,7 @@ for (const retry of [false, true]) {
     const original = JSON.stringify([state.project, state.modelResponse]);
     await load('src/lib/eval/judge.ts', state.mocks).judgeAllResponses({
       evalRunId: 'run-a', userId: 'owner-a', judgeModel: 'synthetic-model',
+      projectId: 'project-a', promptSetId: 'set-a',
       useCaseProfile: state.project.useCaseProfile,
       responses: [{ modelResponseId: state.modelResponse.id, prompt: state.promptItem.prompt,
         goldStandardHint: state.promptItem.goldStandardHint, content: state.modelResponse.content }],

@@ -6,10 +6,13 @@ import { SUPPORTED_MODELS } from '@/lib/connectors/types'
 import type { ConnectorConfig, ConnectorMessage, Provider } from '@/lib/connectors/types'
 import type { JudgeScoreResult } from './types'
 import type { UseCaseProfile } from './types'
+import { assertEvaluationScope, EvaluationScopeError, responseWhere, type BoundEvaluationScope } from './scope'
 
 interface JudgeParams {
   evalRunId: string
   userId: string
+  projectId: string
+  promptSetId: string
   judgeModel: string
   useCaseProfile: UseCaseProfile | null
   responses: {
@@ -22,6 +25,9 @@ interface JudgeParams {
 
 export async function judgeAllResponses(params: JudgeParams): Promise<void> {
   const { evalRunId, userId, judgeModel, useCaseProfile, responses } = params
+  const scope: BoundEvaluationScope = { evalRunId, userId, projectId: params.projectId, promptSetId: params.promptSetId }
+  const currentRun = await assertEvaluationScope(scope)
+  if (currentRun.judgeModel !== judgeModel) throw new EvaluationScopeError()
 
   // Resolve judge model → provider
   const judgeInfo = SUPPORTED_MODELS.find(m => m.model === judgeModel)
@@ -42,21 +48,31 @@ export async function judgeAllResponses(params: JudgeParams): Promise<void> {
 
   // Judge each response
   for (const resp of responses) {
-    if (!resp.content) continue // Skip failed responses
+    const current = await prisma.modelResponse.findUniqueOrThrow({
+      where: { id: resp.modelResponseId, ...responseWhere(scope) },
+      include: { promptItem: true },
+    })
+    if (!current.content) continue // Skip failed responses
+    const checkScope = async () => {
+      await assertEvaluationScope(scope)
+      await prisma.modelResponse.findUniqueOrThrow({
+        where: { id: current.id, ...responseWhere(scope) }, select: { id: true },
+      })
+    }
 
     const scoreResult = await judgeWithRetry(connector, config, {
       useCaseDescription: useCaseProfile
         ? `${useCaseProfile.domain} - ${useCaseProfile.audience}`
         : '一般的なAI利用',
-      goldStandardHint: resp.goldStandardHint || '特になし',
-      prompt: resp.prompt,
-      response: resp.content,
-    })
+      goldStandardHint: current.promptItem.goldStandardHint || '特になし',
+      prompt: current.promptItem.prompt,
+      response: current.content,
+    }, checkScope)
 
     if (scoreResult) {
       await prisma.judgeScore.create({
         data: {
-          modelResponseId: resp.modelResponseId,
+          modelResponse: { connect: { id: current.id, ...responseWhere(scope) } },
           judgeModel,
           accuracy: scoreResult.accuracy.score,
           relevance: scoreResult.relevance.score,
@@ -85,6 +101,7 @@ async function judgeWithRetry(
     prompt: string
     response: string
   },
+  checkScope: () => Promise<void>,
   attempt = 0
 ): Promise<JudgeScoreResult | null> {
   const messages: ConnectorMessage[] = [
@@ -119,6 +136,8 @@ ${input.response}
     },
   ]
 
+  // A revoked scope must not be swallowed as a provider failure or retried.
+  await checkScope()
   try {
     const response = await connector.send(messages, config)
     const parsed = parseJudgeResponse(response.content)
@@ -126,12 +145,12 @@ ${input.response}
 
     // Parse failed, retry once
     if (attempt === 0) {
-      return judgeWithRetry(connector, config, input, 1)
+      return judgeWithRetry(connector, config, input, checkScope, 1)
     }
     return null
   } catch {
     if (attempt === 0) {
-      return judgeWithRetry(connector, config, input, 1)
+      return judgeWithRetry(connector, config, input, checkScope, 1)
     }
     return null
   }

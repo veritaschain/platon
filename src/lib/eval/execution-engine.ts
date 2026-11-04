@@ -6,6 +6,7 @@ import { logEvent } from '@/lib/governance/event-logger'
 import { SUPPORTED_MODELS, MODEL_PRICING } from '@/lib/connectors/types'
 import type { ConnectorConfig, ConnectorMessage, Provider } from '@/lib/connectors/types'
 import type { EvalProgressEvent, ExecutionResult } from './types'
+import { assertEvaluationScope, EvaluationScopeError, isEvaluationScopeError, promptWhere, runWhere, type BoundEvaluationScope } from './scope'
 
 const TIMEOUT_MS = 30000
 const MAX_TOKENS = 4096
@@ -15,6 +16,8 @@ const BASE_BACKOFF_MS = 1000
 interface ExecutionParams {
   evalRunId: string
   userId: string
+  projectId: string
+  promptSetId: string
   promptItems: { id: string; prompt: string; goldStandardHint: string | null }[]
   targetModels: string[]
   onProgress?: (event: EvalProgressEvent) => void
@@ -22,6 +25,13 @@ interface ExecutionParams {
 
 export async function executeEvaluation(params: ExecutionParams): Promise<void> {
   const { evalRunId, userId, promptItems, targetModels, onProgress } = params
+  const scope: BoundEvaluationScope = { evalRunId, userId, projectId: params.projectId, promptSetId: params.promptSetId }
+  const currentRun = await assertEvaluationScope(scope)
+  if (targetModels.some(model => !currentRun.targetModels.includes(model))) throw new EvaluationScopeError()
+  const currentItems = await prisma.promptItem.findMany({
+    where: { id: { in: promptItems.map(item => item.id) }, ...promptWhere(scope) },
+  })
+  if (currentItems.length !== promptItems.length) throw new EvaluationScopeError()
 
   // Resolve model → provider mapping
   const modelInfos = targetModels.map(model => {
@@ -43,7 +53,7 @@ export async function executeEvaluation(params: ExecutionParams): Promise<void> 
   let completedCount = 0
 
   // Build all tasks: promptItem × model
-  const tasks = promptItems.flatMap(item =>
+  const tasks = currentItems.flatMap(item =>
     modelInfos.map(modelInfo => ({
       promptItem: item,
       modelInfo,
@@ -60,6 +70,7 @@ export async function executeEvaluation(params: ExecutionParams): Promise<void> 
       }
 
       const result = await executeWithRetry(
+        scope,
         userId,
         evalRunId,
         promptItem,
@@ -69,21 +80,29 @@ export async function executeEvaluation(params: ExecutionParams): Promise<void> 
       )
 
       completedCount++
-      onProgress?.({
-        type: result.status === 'COMPLETED' ? 'response_complete' : 'response_error',
-        model: modelInfo.model,
-        completedCount,
-        totalCount,
-      })
+      try {
+        await onProgress?.({
+          type: result.status === 'COMPLETED' ? 'response_complete' : 'response_error',
+          model: modelInfo.model,
+          completedCount,
+          totalCount,
+        })
+      } catch {
+        // Progress delivery is best effort; preserve the provider result.
+      }
 
       return result
     })
   )
+  const revoked = results.find(result => result.status === 'rejected' && isEvaluationScopeError(result.reason))
+  if (revoked?.status === 'rejected') throw revoked.reason
+  const rejected = results.find(result => result.status === 'rejected')
+  if (rejected?.status === 'rejected') throw rejected.reason
 
   // Save all results to DB
   for (const result of results) {
     if (result.status === 'fulfilled') {
-      await saveModelResponse(evalRunId, result.value)
+      await saveModelResponse(scope, result.value)
     }
   }
 
@@ -93,12 +112,13 @@ export async function executeEvaluation(params: ExecutionParams): Promise<void> 
     .reduce((sum, r) => sum + r.value.estimatedCostUsd, 0)
 
   await prisma.evalRun.update({
-    where: { id: evalRunId },
+    where: runWhere(scope),
     data: { actualCostUsd: actualCost },
   })
 }
 
 async function executeWithRetry(
+  scope: BoundEvaluationScope,
   userId: string,
   evalRunId: string,
   promptItem: { id: string; prompt: string },
@@ -135,6 +155,10 @@ async function executeWithRetry(
   }
 
   const startTime = Date.now()
+  await assertEvaluationScope(scope)
+  await prisma.promptItem.findUniqueOrThrow({
+    where: { id: promptItem.id, ...promptWhere(scope) }, select: { id: true },
+  })
 
   try {
     const response = await connector.send(messages, config)
@@ -172,7 +196,7 @@ async function executeWithRetry(
     if (attempt < MAX_RETRIES && isRateLimitError(error)) {
       const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt)
       await new Promise(resolve => setTimeout(resolve, backoff))
-      return executeWithRetry(userId, evalRunId, promptItem, provider, model, apiKey, attempt + 1)
+      return executeWithRetry(scope, userId, evalRunId, promptItem, provider, model, apiKey, attempt + 1)
     }
 
     const status = latencyMs >= TIMEOUT_MS ? 'TIMEOUT' : 'FAILED'
@@ -209,11 +233,11 @@ function isRateLimitError(error: unknown): boolean {
   return false
 }
 
-async function saveModelResponse(evalRunId: string, result: ExecutionResult): Promise<string> {
+async function saveModelResponse(scope: BoundEvaluationScope, result: ExecutionResult): Promise<string> {
   const record = await prisma.modelResponse.create({
     data: {
-      evalRunId,
-      promptItemId: result.promptItemId,
+      evalRun: { connect: runWhere(scope) },
+      promptItem: { connect: { id: result.promptItemId, ...promptWhere(scope) } },
       provider: result.provider,
       model: result.model,
       content: result.content,

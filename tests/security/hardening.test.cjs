@@ -16,6 +16,7 @@ function load(file, mocks = {}) {
   const module = { exports: {} };
   function resolve(name) {
     if (Object.hasOwn(mocks, name)) return mocks[name];
+    if (name === '@/lib/eval/scope') return load('src/lib/eval/scope.ts', mocks);
     if (name.startsWith('.')) return load(path.relative(ROOT, path.resolve(path.dirname(filename), name + '.ts')), mocks);
     throw Error('Unexpected test import: ' + name);
   }
@@ -51,6 +52,7 @@ function setup(user = { id: 'owner-a' }) {
     const get = async ({ where }) => { calls.push([name, 'read', where]); return rows.find(r => matches(r, where)) || null; };
     return {
       findFirst: get, findUnique: get,
+      findUniqueOrThrow: async args => { const row = await get(args); if (!row) throw Object.assign(Error('not found'), { code: 'P2025' }); return row; },
       findMany: async ({ where }) => rows.filter(r => matches(r, where)),
       update: async ({ where, data }) => {
         calls.push([name, 'update', where]);

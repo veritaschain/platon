@@ -56,7 +56,7 @@ export async function GET(
       try {
         console.log('[progress] Starting evaluation within SSE stream for run:', params.runId)
 
-        await runFullEvaluation(evalRun.id, user.id, (event) => {
+        await runFullEvaluation(evalRun.id, user.id, params.id, (event) => {
           send(event)
         })
 
@@ -65,7 +65,7 @@ export async function GET(
         console.error('[progress] Evaluation error:', error)
         send({
           type: 'error',
-          message: error instanceof Error ? error.message : '評価中にエラーが発生しました',
+          message: '評価中にエラーが発生しました',
         })
       }
 

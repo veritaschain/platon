@@ -1,6 +1,8 @@
 import { prisma } from '@/lib/db/client'
 import { getConnector } from '@/lib/connectors/registry'
 import { getUserApiKey } from '@/lib/db/api-keys'
+import { maskPII } from '@/lib/governance/pii-masker'
+import { assertEvaluationScope, type BoundEvaluationScope } from './scope'
 import { SUPPORTED_MODELS, MODEL_PRICING } from '@/lib/connectors/types'
 import type { ConnectorConfig, ConnectorMessage, Provider } from '@/lib/connectors/types'
 import type {
@@ -130,8 +132,10 @@ export async function generateRecommendation(
   rankings: RankingEntry[],
   scoreMatrix: ScoreMatrixEntry[],
   useCaseProfile: UseCaseProfile | null,
-  userId: string
+  scope: BoundEvaluationScope
 ): Promise<string> {
+  await assertEvaluationScope(scope)
+  const userId = scope.userId
   // Select cheap model
   const providers = [
     { provider: 'GOOGLE' as const, model: 'gemini-2.5-flash' },
@@ -167,7 +171,7 @@ export async function generateRecommendation(
   const messages: ConnectorMessage[] = [
     {
       role: 'user',
-      content: `あなたはAIモデル選定のコンサルタントです。
+      content: maskPII(`あなたはAIモデル選定のコンサルタントです。
 以下の評価結果に基づき、具体的な推奨アクションを1〜3個提示してください。
 
 ## ユースケース
@@ -182,10 +186,11 @@ ${JSON.stringify(scoreMatrix, null, 2)}
 推奨アクションの例:
 - 「Claude Sonnetをメインに採用し、シンプルな質問はGemini Flashにルーティングすることでコスト最適化を推奨」
 - 具体的なモデル名と理由を含めてください
-- Markdown形式で出力してください`,
+- Markdown形式で出力してください`).masked,
     },
   ]
 
+  await assertEvaluationScope(scope)
   try {
     const response = await connector.send(messages, config)
     return response.content

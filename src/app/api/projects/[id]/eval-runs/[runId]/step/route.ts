@@ -11,6 +11,7 @@ import { calculateObjectiveMetrics, normalizeScores } from '@/lib/eval/metrics-c
 import { getDefaultWeights, computeWeightedRanking, buildScoreMatrix } from '@/lib/eval/score-aggregator'
 import { selectHighlights, buildCostProjection, generateRecommendation } from '@/lib/eval/report-generator'
 import type { UseCaseProfile } from '@/lib/eval/types'
+import { assertEvaluationScope, EvaluationScopeError, isEvaluationScopeError, promptWhere, responseWhere, runWhere, type BoundEvaluationScope } from '@/lib/eval/scope'
 
 // Amplify Lambda has ~10s hard timeout — keep each request under 9s
 const TIMEOUT_MS = 8000
@@ -20,7 +21,7 @@ export async function POST(
   req: Request,
   { params }: { params: { id: string; runId: string } }
 ) {
-  let authorizedScope: { id: string; projectId: string; project: { userId: string } } | null = null
+  let authorizedScope: BoundEvaluationScope | null = null
   try {
     const supabase = createClient()
     const { data: { user } } = await supabase.auth.getUser()
@@ -33,13 +34,15 @@ export async function POST(
 
     // Bind every step to the requested project and authenticated owner before
     // reading inputs, fetching provider keys, mutating status or calling AI.
-    const runScope = { id: params.runId, projectId: params.id, project: { userId: user.id } }
+    const requestedScope = { evalRunId: params.runId, projectId: params.id, userId: user.id }
     const authorizedRun = await prisma.evalRun.findFirst({
-      where: runScope,
+      where: runWhere(requestedScope),
       select: { id: true, promptSetId: true, targetModels: true },
     })
     if (!authorizedRun) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    authorizedScope = runScope
+    const scope: BoundEvaluationScope = { ...requestedScope, promptSetId: authorizedRun.promptSetId }
+    authorizedScope = scope
+    const runScope = runWhere(scope)
 
     const body = await req.json()
     const { step } = body
@@ -102,6 +105,7 @@ export async function POST(
       if (!modelInfo) return NextResponse.json({ error: `Unknown model: ${model}` }, { status: 400 })
 
       const provider = modelInfo.provider as Provider
+      await assertEvaluationScope(scope)
       const apiKey = await getUserApiKey(user.id, provider)
       if (!apiKey) return NextResponse.json({ error: `APIキーが見つかりません: ${provider}` }, { status: 400 })
 
@@ -121,6 +125,10 @@ export async function POST(
           const { masked, maskCount } = maskPII(item.prompt)
           const messages: ConnectorMessage[] = [{ role: 'user', content: masked }]
           const start = Date.now()
+          await assertEvaluationScope(scope)
+          await prisma.promptItem.findUniqueOrThrow({
+            where: { id: item.id, ...promptWhere(scope) }, select: { id: true },
+          })
 
           try {
             const response = await connector.send(messages, config)
@@ -129,8 +137,8 @@ export async function POST(
 
             return await prisma.modelResponse.create({
               data: {
-                evalRunId: params.runId,
-                promptItemId: item.id,
+                evalRun: { connect: runScope },
+                promptItem: { connect: { id: item.id, ...promptWhere(scope) } },
                 provider,
                 model,
                 content: response.content,
@@ -143,11 +151,12 @@ export async function POST(
               },
             })
           } catch (error) {
+            if (isEvaluationScopeError(error)) throw error
             const latencyMs = Date.now() - start
             return await prisma.modelResponse.create({
               data: {
-                evalRunId: params.runId,
-                promptItemId: item.id,
+                evalRun: { connect: runScope },
+                promptItem: { connect: { id: item.id, ...promptWhere(scope) } },
                 provider,
                 model,
                 content: '',
@@ -162,6 +171,11 @@ export async function POST(
           }
         })
       )
+      if (results.some(result => result.status === 'rejected' && isEvaluationScopeError(result.reason))) {
+        throw new EvaluationScopeError()
+      }
+      const rejected = results.find(result => result.status === 'rejected')
+      if (rejected?.status === 'rejected') throw rejected.reason
 
       const completed = results.filter(r => r.status === 'fulfilled').length
       return NextResponse.json({ completed, total: promptItems.length })
@@ -209,6 +223,7 @@ export async function POST(
       const judgeInfo = SUPPORTED_MODELS.find(m => m.model === run.judgeModel)
       if (!judgeInfo) return NextResponse.json({ error: `Unknown judge model: ${run.judgeModel}` }, { status: 400 })
 
+      await assertEvaluationScope(scope)
       const judgeApiKey = await getUserApiKey(user.id, judgeInfo.provider as Provider)
       if (!judgeApiKey) return NextResponse.json({ error: `ジャッジモデルのAPIキーが見つかりません: ${judgeInfo.provider}` }, { status: 400 })
 
@@ -226,7 +241,7 @@ export async function POST(
         ? `${useCaseProfile.domain} - ${useCaseProfile.audience}`
         : '一般的なAI利用'
 
-      await Promise.allSettled(
+      const judgeResults = await Promise.allSettled(
         unjudged.map(async (resp) => {
           const judgeMessages: ConnectorMessage[] = [{
             role: 'user',
@@ -249,6 +264,10 @@ ${resp.content}
 以下の5軸で1-5点で採点し、JSON形式のみで出力してください。
 {"accuracy":{"score":1-5,"reason":"根拠"},"relevance":{"score":1-5,"reason":"..."},"conciseness":{"score":1-5,"reason":"..."},"tone":{"score":1-5,"reason":"..."},"instruction_following":{"score":1-5,"reason":"..."}}`).masked,
           }]
+          await assertEvaluationScope(scope)
+          await prisma.modelResponse.findUniqueOrThrow({
+            where: { id: resp.id, ...responseWhere(scope) }, select: { id: true },
+          })
 
           try {
             const judgeRes = await judgeConnector.send(judgeMessages, judgeConfig)
@@ -265,7 +284,7 @@ ${resp.content}
 
             await prisma.judgeScore.create({
               data: {
-                modelResponseId: resp.id,
+                modelResponse: { connect: { id: resp.id, ...responseWhere(scope) } },
                 judgeModel: run.judgeModel,
                 accuracy: parsed.accuracy.score,
                 relevance: parsed.relevance.score,
@@ -281,11 +300,17 @@ ${resp.content}
                 },
               },
             })
-          } catch {
+          } catch (error) {
+            if (isEvaluationScopeError(error)) throw error
             // Skip failed judge calls
           }
         })
       )
+      if (judgeResults.some(result => result.status === 'rejected' && isEvaluationScopeError(result.reason))) {
+        throw new EvaluationScopeError()
+      }
+      const rejected = judgeResults.find(result => result.status === 'rejected')
+      if (rejected?.status === 'rejected') throw rejected.reason
 
       // Count remaining unjudged
       const remaining = await prisma.modelResponse.count({
@@ -350,8 +375,9 @@ ${resp.content}
 
       let recommendation = ''
       try {
-        recommendation = await generateRecommendation(rankings, scoreMatrix, useCaseProfile, user.id)
-      } catch {
+        recommendation = await generateRecommendation(rankings, scoreMatrix, useCaseProfile, scope)
+      } catch (error) {
+        if (isEvaluationScopeError(error)) throw error
         recommendation = '推奨アクションの生成に失敗しました。スコアテーブルを参考にモデルを選定してください。'
       }
 
@@ -362,7 +388,7 @@ ${resp.content}
 
       await prisma.evalReport.create({
         data: {
-          evalRunId: params.runId,
+          evalRun: { connect: runScope },
           rankings: rankings as any,
           scoreMatrix: scoreMatrix as any,
           highlights: highlights as any,
@@ -385,19 +411,19 @@ ${resp.content}
 
     return NextResponse.json({ error: '不正なstep' }, { status: 400 })
   } catch (error) {
-    console.error('[eval-step] Error:', error)
+    console.error('[eval-step] Evaluation failed', isEvaluationScopeError(error) ? 'scope unavailable' : 'request failed')
 
     // Do not mutate an untrusted run ID after an authentication/lookup error.
     if (authorizedScope) {
       await prisma.evalRun.update({
-        where: authorizedScope,
+        where: runWhere(authorizedScope),
         data: { status: 'FAILED' },
       }).catch(() => {})
     }
 
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'エラーが発生しました' },
-      { status: 500 }
+      { error: isEvaluationScopeError(error) ? 'Not found' : 'エラーが発生しました' },
+      { status: isEvaluationScopeError(error) ? 404 : 500 }
     )
   }
 }

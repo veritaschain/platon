@@ -29,7 +29,7 @@ jobs:
         if: always()
         run: |
           mkdir -p security-evidence
-          git archive --format=zip --output=security-evidence/reviewed-source.zip HEAD src prisma tests package.json package-lock.json tsconfig.json docs/SECURITY-HARDENING-20261101.md
+          git archive --format=zip --output=security-evidence/reviewed-source.zip HEAD src prisma scripts tests .github/workflows/security-regression.yml package.json package-lock.json tsconfig.json docs/SECURITY-HARDENING-20261101.md
           git rev-parse HEAD > security-evidence/checkout.txt
           node --version > security-evidence/node-version.txt
           test ! -f security-results.txt || cp security-results.txt security-evidence/
@@ -53,3 +53,108 @@ jobs:
       - run: npm ci --ignore-scripts --no-audit --no-fund
       - run: npx --no-install prisma generate
       - run: npx --no-install tsc --noEmit
+  postgres-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    services:
+      postgres:
+        # Official postgres:16 manifest, resolved 2026-11-04. Synthetic data only.
+        image: postgres:16@sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a
+        env:
+          POSTGRES_DB: platon_security_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: platon_test_only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d platon_security_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PLATON_TEST_DATABASE_URL: postgresql://postgres:platon_test_only@127.0.0.1:5432/platon_security_test
+      DATABASE_URL: postgresql://postgres:platon_test_only@127.0.0.1:5432/platon_security_test
+      DIRECT_URL: postgresql://postgres:platon_test_only@127.0.0.1:5432/platon_security_test
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.22.1'
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install PostgreSQL command-line client
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes postgresql-client
+      - run: npx --no-install prisma generate
+      - name: Apply tracked migrations to the disposable service database
+        run: |
+          set -euo pipefail
+          npx --no-install prisma migrate deploy | tee database-migration.txt
+      - name: Verify real handlers, evaluator, RLS, migration preservation and read-only key audit
+        run: |
+          set -euo pipefail
+          node --test --test-concurrency=1 --test-reporter=tap tests/database/*.test.cjs | tee database-results.txt
+      - name: Check out immutable evaluator source before this repair
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: bf19c64fbe52cea0551b9b525f4df37ac59acbf5
+          path: baseline-authorization-source
+          persist-credentials: false
+      - name: Prove four authorization cases fail on the previous evaluator with a passing valid-run control
+        env:
+          PLATON_TEST_SOURCE_ROOT: ${{ github.workspace }}/baseline-authorization-source
+          PLATON_TEST_BASELINE_PROBE: '1'
+        run: |
+          set -euo pipefail
+          test "$(git -C baseline-authorization-source rev-parse HEAD)" = bf19c64fbe52cea0551b9b525f4df37ac59acbf5
+          set +e
+          node --test --test-reporter=tap tests/database/evaluator-authorization.test.cjs | tee database-baseline.txt
+          pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          test "${pipeline_status[0]}" -eq 1
+          test "${pipeline_status[1]}" -eq 0
+          python3 - <<'PY'
+          import json, pathlib, re
+          text = pathlib.Path('database-baseline.txt').read_text()
+          expected = {
+              'foreign owner cannot enter the full worker',
+              'owner revoked during key lookup prevents provider dispatch',
+              'owner revoked during provider call prevents response persistence',
+              'judge rechecks ownership before retrying malformed output',
+          }
+          failed = re.findall(r'^\s*not ok \d+ - (.+)$', text, re.M)
+          assert len(failed) == 5, failed
+          assert set(failed) == expected | {'PostgreSQL evaluator authorization boundaries'}, failed
+          assert len(re.findall(r'^\s*ok \d+ - valid full evaluator persists response score and report$', text, re.M)) == 1
+          assert text.count('Missing expected rejection.') == 4
+          print(json.dumps({'baseline': 'bf19c64fbe52cea0551b9b525f4df37ac59acbf5', 'expectedFailures': 4, 'validRunControl': 'passed'}))
+          PY
+      - name: Retain source, migration checksums and database test evidence
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p database-evidence
+          git archive --format=zip --output=database-evidence/reviewed-source.zip HEAD src prisma scripts tests .github/workflows/security-regression.yml package.json package-lock.json docs/SECURITY-HARDENING-20261101.md
+          git rev-parse HEAD > database-evidence/checkout.txt
+          node --version > database-evidence/node-version.txt
+          printf '%s\n' 'postgres:16@sha256:5db6dac2ef5dcff512f4f00a009c3c332b9f2f28f24277175bf3e4a3d02ef83a' > database-evidence/postgres-image.txt
+          sha256sum prisma/migrations/*/migration.sql > database-evidence/migrations.sha256
+          sha256sum database-evidence/reviewed-source.zip > database-evidence/source.sha256
+          for result in database-migration.txt database-results.txt database-baseline.txt; do
+            if test -f "$result"; then cp "$result" database-evidence/; fi
+          done
+          if test -d baseline-authorization-source/.git; then
+            git -C baseline-authorization-source rev-parse HEAD > database-evidence/baseline-checkout.txt
+            git -C baseline-authorization-source archive --format=zip --output="$PWD/database-evidence/baseline-source.zip" HEAD src
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: platon-database-${{ github.run_id }}
+          path: database-evidence/
+          retention-days: 14

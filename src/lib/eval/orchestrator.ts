@@ -6,42 +6,41 @@ import { calculateObjectiveMetrics, normalizeScores } from './metrics-calculator
 import { getDefaultWeights, computeWeightedRanking, buildScoreMatrix } from './score-aggregator'
 import { selectHighlights, buildCostProjection, generateRecommendation } from './report-generator'
 import type { EvalProgressEvent, UseCaseProfile } from './types'
+import { assertEvaluationScope, isEvaluationScopeError, runWhere, responseWhere, type BoundEvaluationScope } from './scope'
 
 export async function runFullEvaluation(
   evalRunId: string,
   userId: string,
+  projectId: string,
   onProgress?: (event: EvalProgressEvent) => void
 ): Promise<void> {
+  const requestedScope = { evalRunId, userId, projectId }
+  let authorizedScope: BoundEvaluationScope | undefined
   try {
     // Load eval run with related data
     const evalRun = await prisma.evalRun.findUniqueOrThrow({
-      where: { id: evalRunId },
+      where: runWhere(requestedScope),
       include: {
         promptSet: { include: { promptItems: { orderBy: { orderIndex: 'asc' } } } },
         project: true,
       },
     })
+    authorizedScope = { ...requestedScope, promptSetId: evalRun.promptSetId }
+    const scope = authorizedScope
 
     const useCaseProfile = evalRun.project.useCaseProfile as UseCaseProfile | null
     // Older execution paths could associate a foreign prompt with this run.
     // Keep those historical rows out of both judging and report aggregation.
-    const responseScope = {
-      evalRunId,
-      evalRun: { projectId: evalRun.projectId, project: { userId } },
-      promptItem: {
-        promptSetId: evalRun.promptSetId,
-        promptSet: { projectId: evalRun.projectId, project: { userId } },
-      },
-    }
+    const responseScope = responseWhere(scope)
 
     // Update status to RUNNING
     await prisma.evalRun.update({
-      where: { id: evalRunId },
+      where: runWhere(scope),
       data: { status: 'RUNNING' },
     })
 
     await prisma.evalProject.update({
-      where: { id: evalRun.projectId },
+      where: { id: projectId, userId },
       data: { status: 'RUNNING' },
     })
 
@@ -64,6 +63,8 @@ export async function runFullEvaluation(
     await executeEvaluation({
       evalRunId,
       userId,
+      projectId,
+      promptSetId: evalRun.promptSetId,
       promptItems,
       targetModels: evalRun.targetModels,
       onProgress,
@@ -80,7 +81,7 @@ export async function runFullEvaluation(
     onProgress?.({ type: 'scoring_start', message: '品質採点を開始します...' })
 
     await prisma.evalRun.update({
-      where: { id: evalRunId },
+      where: runWhere(scope),
       data: { status: 'SCORING' },
     })
 
@@ -93,6 +94,8 @@ export async function runFullEvaluation(
     await judgeAllResponses({
       evalRunId,
       userId,
+      projectId,
+      promptSetId: evalRun.promptSetId,
       judgeModel: evalRun.judgeModel,
       useCaseProfile,
       responses: allResponses.map(r => ({
@@ -158,15 +161,17 @@ export async function runFullEvaluation(
     // Generate recommendation (LLM 1回)
     let recommendation = ''
     try {
-      recommendation = await generateRecommendation(rankings, scoreMatrix, useCaseProfile, userId)
-    } catch {
+      await assertEvaluationScope(scope)
+      recommendation = await generateRecommendation(rankings, scoreMatrix, useCaseProfile, scope)
+    } catch (error) {
+      if (isEvaluationScopeError(error)) throw error
       recommendation = '推奨アクションの生成に失敗しました。スコアテーブルを参考にモデルを選定してください。'
     }
 
     // Save report
     await prisma.evalReport.create({
       data: {
-        evalRunId,
+        evalRun: { connect: runWhere(scope) },
         rankings: rankings as any,
         scoreMatrix: scoreMatrix as any,
         highlights: highlights as any,
@@ -177,12 +182,12 @@ export async function runFullEvaluation(
 
     // Mark as completed
     await prisma.evalRun.update({
-      where: { id: evalRunId },
+      where: runWhere(scope),
       data: { status: 'COMPLETED', completedAt: new Date() },
     })
 
     await prisma.evalProject.update({
-      where: { id: evalRun.projectId },
+      where: { id: projectId, userId },
       data: { status: 'COMPLETED' },
     })
 
@@ -194,32 +199,26 @@ export async function runFullEvaluation(
     onProgress?.({ type: 'complete', message: '評価が完了しました' })
 
   } catch (error) {
-    // Mark as failed
-    await prisma.evalRun.update({
-      where: { id: evalRunId },
-      data: { status: 'FAILED' },
-    }).catch(() => {})
-
-    const evalRun = await prisma.evalRun.findUnique({
-      where: { id: evalRunId },
-      select: { projectId: true },
-    })
-
-    if (evalRun) {
+    // Authentication failure or ownership loss must not mutate a foreign run.
+    if (authorizedScope) {
+      await prisma.evalRun.update({
+        where: runWhere(authorizedScope),
+        data: { status: 'FAILED' },
+      }).catch(() => {})
       await prisma.evalProject.update({
-        where: { id: evalRun.projectId },
+        where: { id: projectId, userId },
         data: { status: 'FAILED' },
       }).catch(() => {})
     }
 
     logEvent(userId, evalRunId, 'model_run' as any, {
       type: 'eval_run_error',
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: 'Evaluation failed',
     })
 
     onProgress?.({
       type: 'error',
-      message: error instanceof Error ? error.message : '評価中にエラーが発生しました',
+      message: '評価中にエラーが発生しました',
     })
 
     throw error

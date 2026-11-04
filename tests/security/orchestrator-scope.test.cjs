@@ -16,6 +16,7 @@ function load(file, mocks) {
   const module = { exports: {} };
   new Function('require', 'module', 'exports', source)(name => {
     if (Object.hasOwn(mocks, name)) return mocks[name];
+    if (name.startsWith('.')) return load(path.relative(ROOT, path.resolve(path.dirname(filename), name + '.ts')), mocks);
     throw Error('Unexpected test import: ' + name);
   }, module, module.exports);
   return module.exports;
@@ -91,7 +92,7 @@ for (const contamination of [null, 'foreign-owner', 'another-project', 'another-
   test('full evaluator keeps response scope: ' + (contamination || 'valid current run'), async () => {
     const { mocks, captured, rows } = setup(contamination);
     const before = JSON.stringify(rows);
-    await load('src/lib/eval/orchestrator.ts', mocks).runFullEvaluation('run-a', 'owner-a',
+    await load('src/lib/eval/orchestrator.ts', mocks).runFullEvaluation('run-a', 'owner-a', 'project-a',
       event => captured.progress.push(event.type));
 
     assert.equal(captured.execution.length, 1);
