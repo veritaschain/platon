@@ -22,7 +22,7 @@ export async function GET(
   }
 
   const evalRun = await prisma.evalRun.findUnique({
-    where: { id: params.runId },
+    where: { id: params.runId, projectId: params.id, project: { userId: user.id } },
   })
   if (!evalRun) {
     return new Response('Run not found', { status: 404 })
@@ -56,16 +56,16 @@ export async function GET(
       try {
         console.log('[progress] Starting evaluation within SSE stream for run:', params.runId)
 
-        await runFullEvaluation(evalRun.id, user.id, (event) => {
+        await runFullEvaluation(evalRun.id, user.id, params.id, (event) => {
           send(event)
         })
 
         send({ type: 'complete', message: '評価が完了しました' })
       } catch (error) {
-        console.error('[progress] Evaluation error:', error)
+        console.error('[progress] Evaluation failed')
         send({
           type: 'error',
-          message: error instanceof Error ? error.message : '評価中にエラーが発生しました',
+          message: '評価中にエラーが発生しました',
         })
       }
 

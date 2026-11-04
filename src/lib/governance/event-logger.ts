@@ -32,5 +32,5 @@ export async function logEvent(
 
   await prisma.eventLog.create({
     data: { userId, sessionId, eventType, payload: enrichedPayload },
-  }).catch(console.error)
+  }).catch(() => console.error('[event-log] Event persistence failed'))
 }
