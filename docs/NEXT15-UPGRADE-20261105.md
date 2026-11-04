@@ -86,6 +86,10 @@ this change.
 
 ## Remaining dependency findings
 
+The figures in this section describe the initial Next.js migration. The
+subsequent [compatible dependency patch](DEPENDENCY-PATCHES-20261105.md) reduces
+the remaining inventory to five entries without changing framework versions.
+
 `npm audit --omit=dev` after this upgrade reported **13 dependency entries**:
 9 high, 3 moderate and 1 low, with no critical entries. This is an inventory of
 advisory matches, not a proof that all are reachable through this application.
