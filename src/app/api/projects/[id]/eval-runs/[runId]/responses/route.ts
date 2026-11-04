@@ -15,8 +15,15 @@ export async function GET(
   })
   if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
+  const run = await prisma.evalRun.findFirst({
+    where: { id: params.runId, projectId: params.id, project: { userId: user.id } },
+    select: { id: true, promptSetId: true },
+  })
+  if (!run) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+
   const responses = await prisma.modelResponse.findMany({
-    where: { evalRunId: params.runId },
+    where: { evalRunId: params.runId, evalRun: { projectId: params.id, project: { userId: user.id } },
+      promptItem: { promptSetId: run.promptSetId, promptSet: { projectId: params.id, project: { userId: user.id } } } },
     include: {
       judgeScore: true,
       promptItem: true,

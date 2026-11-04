@@ -16,7 +16,7 @@ export async function GET(
   if (!project) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
   const run = await prisma.evalRun.findUnique({
-    where: { id: params.runId },
+    where: { id: params.runId, projectId: params.id, project: { userId: user.id } },
     include: {
       _count: {
         select: { modelResponses: true },
