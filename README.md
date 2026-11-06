@@ -4,23 +4,29 @@
 
 ## セットアップ
 
+以下は新しい開発用環境の手順です。既存のDB・保存済みAPIキーを利用する更新では、先に
+[PR #2の適用準備手順](docs/ROLLOUT-READINESS-20261106.md)で対象DBと鍵の互換性を確認してください。
+検証済みのNode.jsは24.22.1です。詳しい手順は[セットアップガイド](SETUP.md)を参照してください。
+
 ### 1. 依存パッケージのインストール
 
 ```bash
-npm install
+npm ci --ignore-scripts --no-audit --no-fund
 ```
 
 ### 2. 環境変数の設定
 
 ```bash
-cp .env.local.example .env.local
+cp .env.local.example .env
 ```
 
-`.env.local`を編集して以下を設定：
+新規checkoutの`.env`を編集して以下を設定します。`.env`はNext.jsとPrisma CLIで使用し、Git管理から除外されています。既存の環境ファイルを上書きしないでください。
+
 - `NEXT_PUBLIC_SUPABASE_URL` - SupabaseプロジェクトURL
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY` - Supabase Anonymous Key
 - `SUPABASE_SERVICE_ROLE_KEY` - Supabase Service Role Key
 - `DATABASE_URL` - PostgreSQL接続URL（Supabaseから取得）
+- `DIRECT_URL` - Prismaの移行対象への接続URL（同じ開発用DBを指定）
 - `ENCRYPTION_KEY` - 64文字のhex文字列（APIキー暗号化用）
 
 暗号化キーの生成：
@@ -30,10 +36,15 @@ node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 
 ### 3. データベースのセットアップ
 
+接続先が新しい空の開発用DBであることを確認してから、コミット済みの移行を適用します。
+
 ```bash
 npm run db:generate
-npm run db:migrate
+npx --no-install prisma migrate deploy
 ```
+
+`npm run db:migrate`は`prisma migrate dev`です。既存環境の更新手順には使わず、
+評価テーブルや移行履歴がすでにある場合は[適用準備手順](docs/ROLLOUT-READINESS-20261106.md)の判定を先に行います。
 
 ### 4. 開発サーバーの起動
 
@@ -87,10 +98,9 @@ Next.js 15 (App Router)
 
 ## デプロイ（Vercel）
 
-1. GitHubにpush
-2. Vercelでプロジェクトをインポート
-3. 環境変数を設定
-4. デプロイ
+既存環境へ適用する前に、[適用準備手順](docs/ROLLOUT-READINESS-20261106.md)で
+DB移行履歴・保存済み暗号文との鍵互換性・Supabaseの認証とDBロールを確認します。
+このリポジトリにはAmplify設定もあります。実際に利用するホスティング、環境変数、対象ブランチは別途確認が必要です。
 
 ## 技術スタック
 

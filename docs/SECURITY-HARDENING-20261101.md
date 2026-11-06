@@ -81,6 +81,11 @@ Before rollout, determine whether any records were encrypted using the old publi
 
 ### Read-only inventory and key audit
 
+The [rollout readiness procedure](ROLLOUT-READINESS-20261106.md) provides the
+exact audit capture command, exit-code interpretation, migration decision table
+and outstanding target-evidence record. It does not collect or approve target
+evidence by itself.
+
 `node scripts/audit-database.cjs --read-only` requires the dedicated `PLATON_AUDIT_DATABASE_URL` environment variable. Set that variable through the approved secret mechanism; do not paste a connection string into a PR, command history, test artifact or chat. The command never falls back to application `DATABASE_URL` or `DIRECT_URL` values.
 
 The audit creates a quiet Prisma client and a repeatable-read, read-only transaction. It verifies transaction settings, inventories the fixed ten current application tables, and scans encrypted keys in bounded batches. Setting `row_security = off` makes a filtered read fail instead of incorrectly reporting zero rows; it does not grant a role access to protected rows. Use a database role authorized to read all UserApiKey rows. The audit outputs only table existence/RLS/SELECT flags, policy counts, and aggregate key counts. It never prints the connection URL, identifiers, ciphertext, plaintext, or raw database errors. It does not alter tables, roles, keys or policies.
