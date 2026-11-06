@@ -122,6 +122,32 @@ test('unauthenticated access is rejected before any DB operation', async () => {
     { params: { id: 'project-a', itemId: 'item-a' } });
   assert.equal(response.status, 401); assert.equal(calls.length, 0);
 });
+for (const file of ['src/lib/crypto.ts', 'src/lib/crypto/encryption.ts']) {
+  for (const key of [undefined, '', 'short', 'g'.repeat(64)]) {
+    test(file + ' rejects missing/malformed key ' + String(key), () => {
+      const previous = process.env.ENCRYPTION_KEY;
+      try {
+        if (key === undefined) delete process.env.ENCRYPTION_KEY; else process.env.ENCRYPTION_KEY = key;
+        const crypto = load(file, { crypto: require('node:crypto') });
+        assert.throws(() => crypto.encrypt('synthetic secret'), /ENCRYPTION_KEY/);
+      } finally { if (previous === undefined) delete process.env.ENCRYPTION_KEY; else process.env.ENCRYPTION_KEY = previous; }
+    });
+  }
+}
+test('both encryption entrypoints share the existing AES-GCM wire format', () => {
+  const previous = process.env.ENCRYPTION_KEY;
+  try {
+    process.env.ENCRYPTION_KEY = '3a'.repeat(32);
+    const a = load('src/lib/crypto.ts', { crypto: require('node:crypto') });
+    const b = load('src/lib/crypto/encryption.ts', { crypto: require('node:crypto') });
+    assert.equal(a.decrypt(b.encrypt('合成のAPIキー')), '合成のAPIキー');
+    assert.equal(b.decrypt(a.encrypt('synthetic')), 'synthetic');
+    assert.equal(a.decrypt(a.encrypt('')), '');
+    const parts = a.encrypt('synthetic').split(':'); parts[1] = '00'.repeat(16);
+    assert.throws(() => a.decrypt(parts.join(':')));
+  } finally { if (previous === undefined) delete process.env.ENCRYPTION_KEY; else process.env.ENCRYPTION_KEY = previous; }
+});
+
 function stepMocks(state) {
   const fail = async () => { throw Error('Provider call forbidden in authorization test'); };
   Object.assign(state.mocks, {

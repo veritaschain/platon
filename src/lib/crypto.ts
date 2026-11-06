@@ -11,7 +11,7 @@ const TAG_LENGTH = 16
 
 function getKey(): Buffer {
   const hex = process.env.ENCRYPTION_KEY
-  if (!hex || hex.length !== 64) {
+  if (!hex || !/^[0-9a-fA-F]{64}$/.test(hex)) {
     throw new Error('ENCRYPTION_KEY must be a 64-character hex string (32 bytes)')
   }
   return Buffer.from(hex, 'hex')
@@ -35,6 +35,11 @@ export function decrypt(encryptedStr: string): string {
   if (parts.length !== 3) throw new Error('Invalid encrypted format')
 
   const [ivHex, tagHex, encryptedHex] = parts
+  if (!new RegExp(`^[0-9a-fA-F]{${IV_LENGTH * 2}}$`).test(ivHex) ||
+      !new RegExp(`^[0-9a-fA-F]{${TAG_LENGTH * 2}}$`).test(tagHex) ||
+      !/^(?:[0-9a-fA-F]{2})*$/.test(encryptedHex)) {
+    throw new Error('Invalid encrypted format')
+  }
   const iv = Buffer.from(ivHex, 'hex')
   const tag = Buffer.from(tagHex, 'hex')
   const encrypted = Buffer.from(encryptedHex, 'hex')

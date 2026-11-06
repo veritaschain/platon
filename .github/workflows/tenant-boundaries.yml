@@ -51,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p tenant-evidence
-          git archive --format=zip --output=tenant-evidence/reviewed-source.zip HEAD src prisma tests .github/workflows/tenant-boundaries.yml package.json package-lock.json tsconfig.json docs/TENANT-BOUNDARY-REPAIR-20261105.md
+          git archive --format=zip --output=tenant-evidence/reviewed-source.zip HEAD src prisma scripts tests .github/workflows/tenant-boundaries.yml package.json package-lock.json tsconfig.json docs/TENANT-BOUNDARY-REPAIR-20261105.md
           git rev-parse HEAD > tenant-evidence/checkout.txt
           node --version > tenant-evidence/node-version.txt
           for result in tenant-results.txt tenant-baseline.txt; do

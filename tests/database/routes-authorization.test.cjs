@@ -2,8 +2,9 @@
 
 // Actual Prisma/PostgreSQL and actual transpiled route/helper code. Only the
 // Supabase session, provider connector and API-key lookup are synthetic.
-// CI populates an empty disposable service database from the unchanged main
-// Prisma schema. No production migration or RLS policy change is tested here.
+// Separate CI jobs populate the same disposable Prisma schema via db push or
+// tracked migrations. Migration/RLS behavior has its own integration tests;
+// these cases exercise route authorization with the resulting relations.
 // No app DATABASE_URL/DIRECT_URL fallback and no external provider requests.
 
 const assert = require('node:assert/strict');
